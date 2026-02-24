@@ -1,0 +1,158 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcoder-cluster"
+version = "1.0.0"
+description = "Distributed FFmpeg video transcoding cluster system"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "一杯原谅绿茶", email = "your.email@example.com"}
+]
+maintainers = [
+    {name = "一杯原谅绿茶", email = "your.email@example.com"}
+]
+keywords = [
+    "ffmpeg",
+    "video",
+    "transcoding",
+    "cluster",
+    "distributed",
+    "h264",
+    "h265",
+    "hevc"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Video :: Conversion",
+    "Topic :: System :: Distributed Computing",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.28.0",
+    "ffmpeg-python>=0.2.0",
+]
+
+[project.optional-dependencies]
+gui = [
+    # tkinter 是 Python 标准库，无需安装
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0",
+]
+docs = [
+    "sphinx>=5.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "myst-parser>=1.0.0",
+]
+
+[project.scripts]
+tc-worker = "cli.worker:main"
+tc-control = "cli.controller:main"
+transcoder-cluster = "cli.controller:main"
+
+[project.gui-scripts]
+tc-worker-gui = "gui.worker_app:main"
+tc-control-gui = "gui.controller_app:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/transcoder-cluster"
+Documentation = "https://github.com/yourusername/transcoder-cluster#readme"
+Repository = "https://github.com/yourusername/transcoder-cluster.git"
+Issues = "https://github.com/yourusername/transcoder-cluster/issues"
+Discussions = "https://github.com/yourusername/transcoder-cluster/discussions"
+Changelog = "https://github.com/yourusername/transcoder-cluster/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["transcoder_cluster*", "cli*", "gui*"]
+
+[tool.setuptools.package-data]
+transcoder_cluster = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+    | tests
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["ffmpeg.*", "requests.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --cov=transcoder_cluster --cov-report=term-missing"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["transcoder_cluster"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

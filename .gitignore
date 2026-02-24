@@ -3,6 +3,19 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Project specific
+worker_files/
+input/
+output/
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.flv
+*.wmv
+tasks.json
+status.json
+
 # C extensions
 *.so
 
