@@ -77,12 +77,12 @@ tc-worker-gui = "gui.worker_app:main"
 tc-control-gui = "gui.controller_app:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/transcoder-cluster"
-Documentation = "https://github.com/yourusername/transcoder-cluster#readme"
-Repository = "https://github.com/yourusername/transcoder-cluster.git"
-Issues = "https://github.com/yourusername/transcoder-cluster/issues"
-Discussions = "https://github.com/yourusername/transcoder-cluster/discussions"
-Changelog = "https://github.com/yourusername/transcoder-cluster/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ybyllc/transcoder-cluster"
+Documentation = "https://github.com/ybyllc/transcoder-cluster#readme"
+Repository = "https://github.com/ybyllc/transcoder-cluster.git"
+Issues = "https://github.com/ybyllc/transcoder-cluster/issues"
+Discussions = "https://github.com/ybyllc/transcoder-cluster/discussions"
+Changelog = "https://github.com/ybyllc/transcoder-cluster/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 include = ["transcoder_cluster*", "cli*", "gui*"]
