@@ -71,39 +71,84 @@ class Controller:
         
         logger.info(f"扫描网段 {subnet}* 的 Worker 节点...")
         
-        # 多线程 ping
+        # 直接并行检查所有 IP 的 Worker 服务（跳过 ping，更快）
         ips = [f"{subnet}{i}" for i in range(1, 255)]
-        alive_ips = []
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-            for ip in executor.map(self._ping_ip, ips):
-                if ip:
-                    alive_ips.append(ip)
-        
-        # 检查 Worker 服务
         workers = []
-        for ip in alive_ips:
+        
+        def check_worker(ip: str) -> Optional[str]:
+            """检查单个 IP 是否有 Worker 服务"""
             try:
-                r = requests.get(f"http://{ip}:{port}/ping", timeout=0.3)
+                r = requests.get(f"http://{ip}:{port}/ping", timeout=0.1)
                 if r.text == "pong":
-                    workers.append(ip)
-                    logger.info(f"发现 Worker: {ip}")
+                    return ip
             except Exception:
-                continue
+                pass
+            return None
+        
+        # 多线程并行检查
+        with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
+            results = executor.map(check_worker, ips)
+            for result in results:
+                if result:
+                    workers.append(result)
+                    logger.info(f"发现 Worker: {result}")
         
         self.workers = workers
         return workers
     
     def _get_local_subnet(self) -> str:
-        """获取本机局域网网段"""
-        hostname = socket.gethostname()
+        """获取本机局域网网段（优先获取真实局域网IP，排除VPN/虚拟网卡）"""
+        # 方法1: 通过连接外部地址获取本地IP（最可靠）
         try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
+                # 排除 VPN/虚拟网段 (198.18.x.x, 10.x.x.x等)
+                parts = local_ip.split('.')
+                if len(parts) == 4:
+                    first_octet = int(parts[0])
+                    second_octet = int(parts[1])
+                    # 排除 198.18.x.x (VPN常用) 和 127.x.x.x
+                    if not (first_octet == 198 and second_octet == 18) and first_octet != 127:
+                        return '.'.join(parts[:3]) + '.'
+        except Exception:
+            pass
+        
+        # 方法2: 获取所有网络接口
+        try:
+            import netifaces
+            for interface in netifaces.interfaces():
+                addrs = netifaces.ifaddresses(interface)
+                if netifaces.AF_INET in addrs:
+                    for addr_info in addrs[netifaces.AF_INET]:
+                        ip = addr_info['addr']
+                        parts = ip.split('.')
+                        if len(parts) == 4:
+                            first_octet = int(parts[0])
+                            second_octet = int(parts[1])
+                            # 只接受常见局域网段: 192.168.x.x, 10.x.x.x, 172.16-31.x.x
+                            if first_octet == 192 and second_octet == 168:
+                                return '.'.join(parts[:3]) + '.'
+                            elif first_octet == 10:
+                                return '.'.join(parts[:3]) + '.'
+                            elif first_octet == 172 and 16 <= second_octet <= 31:
+                                return '.'.join(parts[:3]) + '.'
+        except ImportError:
+            pass
+        
+        # 方法3: 使用 hostname（可能不准确）
+        try:
+            hostname = socket.gethostname()
             local_ip = socket.gethostbyname(hostname)
             parts = local_ip.split('.')
             if len(parts) == 4:
-                return '.'.join(parts[:3]) + '.'
+                first_octet = int(parts[0])
+                second_octet = int(parts[1])
+                if not (first_octet == 198 and second_octet == 18) and first_octet != 127:
+                    return '.'.join(parts[:3]) + '.'
         except Exception:
             pass
+        
         return "192.168.1."
     
     def _ping_ip(self, ip: str) -> Optional[str]:
