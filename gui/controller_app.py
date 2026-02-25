@@ -409,7 +409,8 @@ class ControllerApp:
     def _worker_supports_codec(self, worker_ip: str, codec: str) -> bool:
         capabilities = self.node_capabilities.get(worker_ip)
         if not capabilities:
-            return True
+            # 硬件编码必须已明确探测到支持再放行
+            return False if "_nvenc" in codec else True
         encoders = capabilities.get("encoders") or []
         return codec in encoders
 
@@ -421,8 +422,16 @@ class ControllerApp:
             return
 
         support_count = sum(1 for ip in workers if self._worker_supports_codec(ip, codec))
+        known_count = sum(1 for ip in workers if ip in self.node_capabilities)
         if "_nvenc" in codec:
-            self.codec_support_var.set(f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}")
+            if known_count < len(workers):
+                self.codec_support_var.set(
+                    f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}（能力检测中 {known_count}/{len(workers)}）"
+                )
+            else:
+                self.codec_support_var.set(
+                    f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}"
+                )
         else:
             self.codec_support_var.set(f"编码器支持: {codec}，检测支持节点 {support_count}/{len(workers)}")
 
