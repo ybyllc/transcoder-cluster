@@ -30,7 +30,6 @@ class WorkerApp:
         
         # Worker 实例
         self.worker: Worker = None
-        self.worker_thread: threading.Thread = None
         
         # 发现服务
         self.heartbeat: HeartbeatService = None
@@ -115,11 +114,9 @@ class WorkerApp:
         # 创建工作目录
         os.makedirs(work_dir, exist_ok=True)
         
-        # 启动 Worker
+        # 启动 Worker（使用 start_async 在后台线程运行）
         self.worker = Worker(port=port, work_dir=work_dir)
-        
-        self.worker_thread = threading.Thread(target=self.worker.start, daemon=True)
-        self.worker_thread.start()
+        self.worker.start_async()
         
         # 启动发现服务
         self.heartbeat = HeartbeatService(

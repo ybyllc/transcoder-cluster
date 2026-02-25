@@ -264,30 +264,53 @@ class Worker:
         self.port = port
         self.work_dir = work_dir or config.work_dir
         self.server: Optional[HTTPServer] = None
+        self._server_thread: Optional[threading.Thread] = None
         self._running = False
         
         # 确保工作目录存在
         os.makedirs(self.work_dir, exist_ok=True)
     
     def start(self) -> None:
-        """启动 Worker 服务器"""
+        """启动 Worker 服务器（阻塞直到收到 KeyboardInterrupt 或 stop() 被调用）"""
         self.server = HTTPServer(('0.0.0.0', self.port), WorkerHandler)
         self._running = True
         
         logger.info(f"Worker 启动于 http://0.0.0.0:{self.port}")
         logger.info(f"工作目录: {self.work_dir}")
         
+        # 在主线程中运行 serve_forever
+        # KeyboardInterrupt 会被抛出到调用者
         try:
             self.server.serve_forever()
-        except KeyboardInterrupt:
-            self.stop()
+        finally:
+            self._running = False
+    
+    def start_async(self) -> None:
+        """异步启动 Worker 服务器（在后台线程中运行，立即返回）"""
+        self.server = HTTPServer(('0.0.0.0', self.port), WorkerHandler)
+        self._running = True
+        
+        logger.info(f"Worker 启动于 http://0.0.0.0:{self.port}")
+        logger.info(f"工作目录: {self.work_dir}")
+        
+        # 在单独的线程中运行 serve_forever
+        self._server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self._server_thread.start()
     
     def stop(self) -> None:
         """停止 Worker 服务器"""
         if self.server:
-            self.server.shutdown()
+            was_running = self._running
             self._running = False
-            logger.info("Worker 已停止")
+            if was_running:
+                logger.info("正在停止 Worker...")
+                try:
+                    self.server.shutdown()
+                except Exception as e:
+                    logger.debug(f"shutdown() 异常（可忽略）: {e}")
+                if self._server_thread:
+                    self._server_thread.join(timeout=2)
+                logger.info("Worker 已停止")
     
     @classmethod
     def get_status(cls) -> Dict[str, Any]:

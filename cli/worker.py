@@ -6,7 +6,6 @@ Worker 节点命令行入口
 """
 
 import argparse
-import signal
 import sys
 
 from transcoder_cluster.core.worker import Worker
@@ -93,30 +92,27 @@ def main():
             get_status=lambda: Worker.get_status()
         )
     
-    # 信号处理
-    def signal_handler(sig, frame):
-        logger.info("正在关闭 Worker...")
-        worker.stop()
-        if heartbeat:
-            heartbeat.stop()
-        if responder:
-            responder.stop()
-        sys.exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # 启动服务
+    # 启动发现服务
     if heartbeat:
         heartbeat.start()
     if responder:
         responder.start()
     
-    logger.info(f"Worker 启动于端口 {args.port}")
-    logger.info(f"工作目录: {args.work_dir}")
+    # 显示退出提示
+    logger.info(f"按 Ctrl+C 退出")
     
-    # 启动 Worker
-    worker.start()
+    # 启动 Worker（阻塞，直到收到 KeyboardInterrupt）
+    try:
+        worker.start()
+    except KeyboardInterrupt:
+        logger.info("正在关闭 Worker...")
+    finally:
+        worker.stop()
+        if heartbeat:
+            heartbeat.stop()
+        if responder:
+            responder.stop()
+        logger.info("Worker 已退出")
 
 
 if __name__ == "__main__":

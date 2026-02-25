@@ -73,10 +73,22 @@ class DiscoveryService:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 msg = json.dumps({"type": "discovery"}).encode()
-                s.sendto(msg, ("<broadcast>", self.discovery_port))
-                logger.debug(f"广播 discovery 消息到端口 {self.discovery_port}")
+                # 诊断日志：获取广播地址和本机IP
+                broadcast_addr = "<broadcast>"
+                local_ip = self._get_local_ip()
+                s.sendto(msg, (broadcast_addr, self.discovery_port))
+                logger.debug(f"[诊断] 广播 discovery 消息: {broadcast_addr}:{self.discovery_port}, 本机IP: {local_ip}")
         except Exception as e:
             logger.error(f"广播发现消息失败: {e}")
+    
+    def _get_local_ip(self) -> str:
+        """获取本地 IP"""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+        except Exception:
+            return socket.gethostbyname(socket.gethostname())
     
     def _listen_loop(self) -> None:
         """监听循环"""
@@ -182,7 +194,7 @@ class HeartbeatService:
         """启动心跳服务"""
         self._thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._thread.start()
-        logger.info(f"心跳服务启动，间隔 {self.interval} 秒")
+        logger.debug(f"[诊断] 心跳服务启动，端口: {self.discovery_port}, 间隔: {self.interval} 秒, 本机IP: {self._get_local_ip()}")
     
     def stop(self) -> None:
         """停止心跳服务"""
@@ -206,14 +218,16 @@ class HeartbeatService:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             
+            local_ip = self._get_local_ip()
             msg = json.dumps({
                 "type": "heartbeat",
                 "hostname": socket.gethostname(),
-                "ip": self._get_local_ip(),
+                "ip": local_ip,
                 "status": self.get_status()
             }).encode()
             
             s.sendto(msg, ("<broadcast>", self.discovery_port))
+            logger.debug(f"[诊断] 发送心跳: <broadcast>:{self.discovery_port}, 本机IP: {local_ip}")
     
     def _get_local_ip(self) -> str:
         """获取本地 IP"""
@@ -254,7 +268,7 @@ class DiscoveryResponder:
         """启动发现响应器"""
         self._thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._thread.start()
-        logger.info(f"发现响应器启动，监听端口 {self.discovery_port}")
+        logger.debug(f"[诊断] 发现响应器启动，监听端口: {self.discovery_port}, 本机IP: {self._get_local_ip()}")
     
     def stop(self) -> None:
         """停止发现响应器"""
@@ -274,15 +288,18 @@ class DiscoveryResponder:
                 try:
                     data, addr = s.recvfrom(4096)
                     msg = json.loads(data.decode())
+                    logger.debug(f"[诊断] 收到消息: {msg.get('type')} from {addr}")
                     
                     if msg.get("type") == "discovery":
+                        local_ip = self._get_local_ip()
                         response = json.dumps({
                             "type": "discovery_response",
                             "hostname": socket.gethostname(),
-                            "ip": self._get_local_ip(),
+                            "ip": local_ip,
                             "status": self.get_status()
                         }).encode()
                         s.sendto(response, addr)
+                        logger.debug(f"[诊断] 响应 discovery 请求到 {addr}, 本机IP: {local_ip}")
                         
                 except socket.timeout:
                     continue
