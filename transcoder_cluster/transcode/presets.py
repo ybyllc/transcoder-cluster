@@ -4,13 +4,14 @@
 提供常用的转码配置预设
 """
 
-from typing import Dict, List, Any
 from dataclasses import dataclass
+from typing import Any, Dict, List
 
 
 @dataclass
 class TranscodePreset:
     """转码预设"""
+
     name: str
     description: str
     codec: str
@@ -20,28 +21,28 @@ class TranscodePreset:
     preset: str = "medium"
     audio_codec: str = "aac"
     audio_bitrate: str = "128k"
-    
+
     def to_ffmpeg_args(self) -> List[str]:
         """转换为 FFmpeg 参数列表"""
         args = ["-c:v", self.codec]
-        
+
         if self.resolution:
             args.extend(["-vf", f"scale={self.resolution}"])
-        
+
         if self.crf is not None:
             args.extend(["-crf", str(self.crf)])
         elif self.bitrate:
             args.extend(["-b:v", self.bitrate])
-        
+
         if self.preset:
             args.extend(["-preset", self.preset])
-        
+
         if self.audio_codec:
             args.extend(["-c:a", self.audio_codec])
-        
+
         if self.audio_bitrate:
             args.extend(["-b:a", self.audio_bitrate])
-        
+
         return args
 
 
@@ -54,7 +55,7 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="libx264",
         resolution="1920:1080",
         crf=18,
-        preset="slow"
+        preset="slow",
     ),
     "1080p_h264_standard": TranscodePreset(
         name="1080p H.264 标准",
@@ -62,7 +63,7 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="libx264",
         resolution="1920:1080",
         crf=23,
-        preset="medium"
+        preset="medium",
     ),
     "720p_h264": TranscodePreset(
         name="720p H.264",
@@ -70,7 +71,7 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="libx264",
         resolution="1280:720",
         crf=23,
-        preset="medium"
+        preset="medium",
     ),
     "480p_h264": TranscodePreset(
         name="480p H.264",
@@ -78,9 +79,8 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="libx264",
         resolution="854:480",
         crf=28,
-        preset="fast"
+        preset="fast",
     ),
-    
     # H.265/HEVC 预设
     "1080p_h265_high": TranscodePreset(
         name="1080p H.265 高画质",
@@ -88,7 +88,7 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="libx265",
         resolution="1920:1080",
         crf=20,
-        preset="slow"
+        preset="slow",
     ),
     "1080p_h265_standard": TranscodePreset(
         name="1080p H.265 标准",
@@ -96,7 +96,7 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="libx265",
         resolution="1920:1080",
         crf=28,
-        preset="medium"
+        preset="medium",
     ),
     "4k_h265": TranscodePreset(
         name="4K H.265",
@@ -104,9 +104,8 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="libx265",
         resolution="3840:2160",
         crf=24,
-        preset="medium"
+        preset="medium",
     ),
-    
     # 硬件加速预设 (NVIDIA)
     "1080p_nvenc": TranscodePreset(
         name="1080p NVENC",
@@ -114,7 +113,7 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="h264_nvenc",
         resolution="1920:1080",
         bitrate="8M",
-        preset="p4"
+        preset="p4",
     ),
     "1080p_hevc_nvenc": TranscodePreset(
         name="1080p HEVC NVENC",
@@ -122,23 +121,22 @@ PRESETS: Dict[str, TranscodePreset] = {
         codec="hevc_nvenc",
         resolution="1920:1080",
         bitrate="5M",
-        preset="p4"
+        preset="p4",
     ),
-    
     # 音频提取预设
     "audio_mp3": TranscodePreset(
         name="提取 MP3 音频",
         description="提取音频并转换为 MP3 格式",
         codec="none",
         audio_codec="libmp3lame",
-        audio_bitrate="320k"
+        audio_bitrate="320k",
     ),
     "audio_aac": TranscodePreset(
         name="提取 AAC 音频",
         description="提取音频并转换为 AAC 格式",
         codec="none",
         audio_codec="aac",
-        audio_bitrate="256k"
+        audio_bitrate="256k",
     ),
 }
 
@@ -146,13 +144,13 @@ PRESETS: Dict[str, TranscodePreset] = {
 def get_preset(name: str) -> TranscodePreset:
     """
     获取预设
-    
+
     Args:
         name: 预设名称
-        
+
     Returns:
         预设对象
-        
+
     Raises:
         KeyError: 预设不存在
     """

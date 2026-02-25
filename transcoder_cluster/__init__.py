@@ -8,13 +8,13 @@ __version__ = "1.0.0"
 __author__ = "一杯原谅绿茶"
 __email__ = "your.email@example.com"
 
-from transcoder_cluster.core.worker import Worker
 from transcoder_cluster.core.controller import Controller
 from transcoder_cluster.core.discovery import DiscoveryService
+from transcoder_cluster.core.worker import Worker
 
 __all__ = [
     "Worker",
-    "Controller", 
+    "Controller",
     "DiscoveryService",
     "__version__",
 ]
