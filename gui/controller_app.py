@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tkinter as tk
 import zipfile
 from tkinter import filedialog
 from typing import Any, Dict, List, Optional
@@ -71,9 +72,24 @@ class ControllerApp:
         content_frame = ttk.Frame(main_frame)
         content_frame.pack(fill=BOTH, expand=YES)
 
-        self.left_frame = ttk.Frame(content_frame, width=420)
-        self.left_frame.pack(side=LEFT, fill=Y, padx=(0, 10))
-        self.left_frame.pack_propagate(False)
+        self.left_panel_frame = ttk.Frame(content_frame, width=460)
+        self.left_panel_frame.pack(side=LEFT, fill=Y, padx=(0, 10))
+        self.left_panel_frame.pack_propagate(False)
+
+        self.left_canvas = tk.Canvas(self.left_panel_frame, highlightthickness=0)
+        self.left_scrollbar = ttk.Scrollbar(
+            self.left_panel_frame,
+            orient=VERTICAL,
+            command=self.left_canvas.yview,
+        )
+        self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
+        self.left_scrollbar.pack(side=RIGHT, fill=Y)
+        self.left_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+
+        self.left_frame = ttk.Frame(self.left_canvas)
+        self.left_canvas_window = self.left_canvas.create_window((0, 0), window=self.left_frame, anchor="nw")
+        self.left_frame.bind("<Configure>", self._on_left_content_configure)
+        self.left_canvas.bind("<Configure>", self._on_left_canvas_configure)
 
         self.right_frame = ttk.Frame(content_frame)
         self.right_frame.pack(side=LEFT, fill=BOTH, expand=YES)
@@ -84,6 +100,7 @@ class ControllerApp:
         self._create_left_flow_panel()
         self._create_right_file_panel()
         self._create_bottom_status_panel()
+        self._bind_left_scroll_widgets(self.left_frame)
 
     def _create_left_flow_panel(self):
         sys_frame = ttk.Labelframe(self.left_frame, text="步骤 1: 环境检查", padding=10)
@@ -103,15 +120,7 @@ class ControllerApp:
             bootstyle="warning",
             command=self._install_ffmpeg,
         )
-        self.install_ffmpeg_btn.pack(side=LEFT)
         ToolTip(self.install_ffmpeg_btn, text="检测不到 FFmpeg 时可自动下载安装")
-
-        ttk.Button(
-            ffmpeg_btn_frame,
-            text="重新检测",
-            bootstyle="secondary",
-            command=self._check_local_ffmpeg,
-        ).pack(side=LEFT, padx=(8, 0))
 
         files_frame = ttk.Labelframe(self.left_frame, text="步骤 2: 添加文件", padding=10)
         files_frame.pack(fill=X, pady=(0, 8))
@@ -142,16 +151,20 @@ class ControllerApp:
         self.crf_var = ttk.StringVar(value="28")
         ttk.Entry(cfg_frame, textvariable=self.crf_var, width=10).grid(row=2, column=1, sticky=W, pady=3)
 
-        ttk.Label(cfg_frame, text="最大宽:").grid(row=3, column=0, sticky=W, pady=3)
-        self.max_width_var = ttk.StringVar(value="")
-        ttk.Entry(cfg_frame, textvariable=self.max_width_var, width=10).grid(row=3, column=1, sticky=W, pady=3)
+        ttk.Label(cfg_frame, text="最大分辨率:").grid(row=3, column=0, sticky=W, pady=3)
+        size_row = ttk.Frame(cfg_frame)
+        size_row.grid(row=3, column=1, sticky=W, pady=3)
 
-        ttk.Label(cfg_frame, text="最大高:").grid(row=4, column=0, sticky=W, pady=3)
+        ttk.Label(size_row, text="宽").pack(side=LEFT)
+        self.max_width_var = ttk.StringVar(value="")
+        ttk.Entry(size_row, textvariable=self.max_width_var, width=8).pack(side=LEFT, padx=(4, 10))
+
+        ttk.Label(size_row, text="高").pack(side=LEFT)
         self.max_height_var = ttk.StringVar(value="")
-        ttk.Entry(cfg_frame, textvariable=self.max_height_var, width=10).grid(row=4, column=1, sticky=W, pady=3)
+        ttk.Entry(size_row, textvariable=self.max_height_var, width=8).pack(side=LEFT, padx=(4, 0))
 
         self.codec_support_var = ttk.StringVar(value="编码器支持: 等待节点信息")
-        ttk.Label(cfg_frame, textvariable=self.codec_support_var, bootstyle="info", wraplength=320).grid(row=5, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        ttk.Label(cfg_frame, textvariable=self.codec_support_var, bootstyle="info", wraplength=320).grid(row=4, column=0, columnspan=2, sticky=W, pady=(6, 0))
 
         dispatch_frame = ttk.Labelframe(self.left_frame, text="步骤 4: 派发模式", padding=10)
         dispatch_frame.pack(fill=X, pady=(0, 8))
@@ -173,11 +186,8 @@ class ControllerApp:
         run_frame = ttk.Labelframe(self.left_frame, text="步骤 5: 开始转码", padding=10)
         run_frame.pack(fill=X)
 
-        self.start_auto_btn = ttk.Button(run_frame, text="开始转码（自动派发）", bootstyle="success", command=self._start_auto_transcode)
-        self.start_auto_btn.pack(fill=X)
-
-        self.start_single_btn = ttk.Button(run_frame, text="开始转码（指定节点）", bootstyle="primary", command=self._start_single_transcode)
-        self.start_single_btn.pack(fill=X, pady=(8, 0))
+        self.start_btn = ttk.Button(run_frame, text="开始转码", bootstyle="success", command=self._start_transcode)
+        self.start_btn.pack(fill=X)
 
         self._on_preset_changed()
         self._on_dispatch_mode_changed()
@@ -237,6 +247,31 @@ class ControllerApp:
         self.nodes_tree.column("nvenc", width=80, anchor=CENTER)
 
         self.nodes_tree.pack(fill=X)
+
+    def _on_left_content_configure(self, _event=None):
+        """同步左侧滚动区域大小。"""
+        self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+
+    def _on_left_canvas_configure(self, event):
+        """让左侧内容宽度跟随画布宽度。"""
+        self.left_canvas.itemconfigure(self.left_canvas_window, width=event.width)
+
+    def _on_left_mousewheel(self, event):
+        """处理左侧滚动条滚轮滚动。"""
+        if event.delta:
+            self.left_canvas.yview_scroll(int(-event.delta / 120), "units")
+        elif event.num == 4:
+            self.left_canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            self.left_canvas.yview_scroll(1, "units")
+
+    def _bind_left_scroll_widgets(self, widget):
+        """递归绑定左栏鼠标滚轮事件。"""
+        widget.bind("<MouseWheel>", self._on_left_mousewheel, add="+")
+        widget.bind("<Button-4>", self._on_left_mousewheel, add="+")
+        widget.bind("<Button-5>", self._on_left_mousewheel, add="+")
+        for child in widget.winfo_children():
+            self._bind_left_scroll_widgets(child)
 
     def _on_node_discovered(self, node_info: Dict[str, Any]):
         ip = node_info.get("ip")
@@ -407,10 +442,13 @@ class ControllerApp:
         return args
 
     def _worker_supports_codec(self, worker_ip: str, codec: str) -> bool:
+        if "_nvenc" not in codec:
+            return True
+
         capabilities = self.node_capabilities.get(worker_ip)
         if not capabilities:
             # 硬件编码必须已明确探测到支持再放行
-            return False if "_nvenc" in codec else True
+            return False
         encoders = capabilities.get("encoders") or []
         return codec in encoders
 
@@ -421,31 +459,22 @@ class ControllerApp:
             self.codec_support_var.set("编码器支持: 暂无节点在线")
             return
 
+        if "_nvenc" not in codec:
+            self.codec_support_var.set(f"编码器支持: {codec}（软件编码，无需节点能力检测）")
+            return
+
         support_count = sum(1 for ip in workers if self._worker_supports_codec(ip, codec))
         known_count = sum(1 for ip in workers if ip in self.node_capabilities)
-        if "_nvenc" in codec:
-            if known_count < len(workers):
-                self.codec_support_var.set(
-                    f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}（能力检测中 {known_count}/{len(workers)}）"
-                )
-            else:
-                self.codec_support_var.set(
-                    f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}"
-                )
+        if known_count < len(workers):
+            self.codec_support_var.set(
+                f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}（能力检测中 {known_count}/{len(workers)}）"
+            )
         else:
-            self.codec_support_var.set(f"编码器支持: {codec}，检测支持节点 {support_count}/{len(workers)}")
+            self.codec_support_var.set(
+                f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}"
+            )
 
-    def _start_auto_transcode(self):
-        self.dispatch_mode_var.set("auto")
-        self._on_dispatch_mode_changed()
-        self._start_transcode(mode="auto")
-
-    def _start_single_transcode(self):
-        self.dispatch_mode_var.set("single")
-        self._on_dispatch_mode_changed()
-        self._start_transcode(mode="single")
-
-    def _start_transcode(self, mode: str):
+    def _start_transcode(self):
         if self.running:
             Messagebox.show_warning("已有任务正在执行", "提示")
             return
@@ -469,6 +498,7 @@ class ControllerApp:
             Messagebox.show_error("未发现可用节点，请先刷新节点", "错误")
             return
 
+        mode = self.dispatch_mode_var.get()
         if mode == "single":
             selected_worker = self.node_var.get().strip()
             if not selected_worker:
@@ -476,13 +506,19 @@ class ControllerApp:
                 return
             workers = [selected_worker]
 
-        supported_workers = [ip for ip in workers if self._worker_supports_codec(ip, codec)]
-        if not supported_workers:
-            Messagebox.show_error(f"没有节点支持编码器 {codec}", "错误")
-            return
-
-        if mode == "auto" and len(supported_workers) < len(workers):
-            Messagebox.show_info(f"部分节点不支持 {codec}，将自动使用支持的节点执行", "提示")
+        target_workers = workers
+        if "_nvenc" in codec:
+            supported_workers = [ip for ip in workers if self._worker_supports_codec(ip, codec)]
+            known_count = sum(1 for ip in workers if ip in self.node_capabilities)
+            if not supported_workers and known_count < len(workers):
+                Messagebox.show_warning("NVENC 能力检测中，请稍后再试", "提示")
+                return
+            if not supported_workers:
+                Messagebox.show_error(f"没有节点支持编码器 {codec}", "错误")
+                return
+            if mode == "auto" and len(supported_workers) < len(workers):
+                Messagebox.show_info(f"部分节点不支持 {codec}，将自动使用支持的节点执行", "提示")
+            target_workers = supported_workers
 
         tasks = self.controller.create_tasks_for_files(
             self.selected_files,
@@ -493,8 +529,7 @@ class ControllerApp:
 
         self.running = True
         self.dispatch_stop_event.clear()
-        self.start_auto_btn.config(state=DISABLED)
-        self.start_single_btn.config(state=DISABLED)
+        self.start_btn.config(state=DISABLED)
 
         self._refresh_file_tree()
         self._refresh_overall_progress()
@@ -509,7 +544,7 @@ class ControllerApp:
             try:
                 result = self.controller.dispatch_tasks(
                     tasks,
-                    supported_workers,
+                    target_workers,
                     on_task_update=on_task_update,
                     on_node_update=on_node_update,
                     stop_event=self.dispatch_stop_event,
@@ -532,8 +567,7 @@ class ControllerApp:
 
     def _on_dispatch_finished(self, result: Dict[str, Any]):
         self.running = False
-        self.start_auto_btn.config(state=NORMAL)
-        self.start_single_btn.config(state=NORMAL)
+        self.start_btn.config(state=NORMAL)
         self._refresh_file_tree()
         self._refresh_overall_progress()
 
@@ -544,8 +578,7 @@ class ControllerApp:
 
     def _on_dispatch_error(self, error_message: str):
         self.running = False
-        self.start_auto_btn.config(state=NORMAL)
-        self.start_single_btn.config(state=NORMAL)
+        self.start_btn.config(state=NORMAL)
         Messagebox.show_error(f"任务执行异常: {error_message}", "错误")
 
     def _get_discovered_worker_ips(self) -> List[str]:
@@ -710,13 +743,16 @@ class ControllerApp:
                 first_line = result.stdout.splitlines()[0] if result.stdout else ""
                 version = first_line.replace("ffmpeg version", "").strip()
                 self.ffmpeg_version_var.set(f"FFmpeg: {version}")
-                self.install_ffmpeg_btn.config(bootstyle="secondary")
+                if self.install_ffmpeg_btn.winfo_manager():
+                    self.install_ffmpeg_btn.pack_forget()
                 return
         except Exception:
             pass
 
         self.ffmpeg_version_var.set("FFmpeg: 未安装")
         self.install_ffmpeg_btn.config(bootstyle="warning")
+        if not self.install_ffmpeg_btn.winfo_manager():
+            self.install_ffmpeg_btn.pack(side=LEFT)
 
     def _install_ffmpeg(self):
         self.install_ffmpeg_btn.config(state=DISABLED)
@@ -812,7 +848,7 @@ def main():
     root = ttk.Window(
         title="Transcoder Cluster - 控制端",
         themename="cosmo",
-        size=(1450, 920),
+        size=(1500, 1020),
     )
     app = ControllerApp(root)
 
