@@ -3,14 +3,19 @@
 GUI 控制端应用
 
 提供图形界面的任务管理和节点监控
+使用 ttkbootstrap 实现现代化界面
 """
 
 import os
 import threading
 from datetime import datetime
 
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+from ttkbootstrap.scrolled import ScrolledText
+from ttkbootstrap.tooltip import ToolTip
+from ttkbootstrap.dialogs import Messagebox
+from tkinter import filedialog
 
 from transcoder_cluster.core.controller import Controller
 from transcoder_cluster.core.discovery import DiscoveryService
@@ -24,10 +29,8 @@ logger = get_logger(__name__)
 class ControllerApp:
     """GUI 控制端应用"""
     
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: ttk.Window):
         self.root = root
-        self.root.title("Transcoder Cluster - 控制端")
-        self.root.geometry("1024x768")
         
         # 初始化控制器
         self.controller = Controller()
@@ -49,68 +52,108 @@ class ControllerApp:
     def _create_ui(self):
         """创建用户界面"""
         # 创建主框架
-        self.main_frame = ttk.Frame(self.root, padding="10")
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
+        self.main_frame = ttk.Frame(self.root, padding=10)
+        self.main_frame.pack(fill=BOTH, expand=YES)
         
         # 创建标签页
         self.notebook = ttk.Notebook(self.main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook.pack(fill=BOTH, expand=YES)
         
         # 节点管理标签页
-        self.nodes_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.nodes_tab, text="节点管理")
+        self.nodes_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.nodes_tab, text="📡 节点管理")
         self._create_nodes_tab()
         
         # 任务管理标签页
-        self.tasks_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.tasks_tab, text="任务管理")
+        self.tasks_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.tasks_tab, text="📋 任务管理")
         self._create_tasks_tab()
         
         # 转码配置标签页
-        self.transcode_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.transcode_tab, text="转码配置")
+        self.transcode_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.transcode_tab, text="⚙️ 转码配置")
         self._create_transcode_tab()
         
         # 日志标签页
-        self.logs_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.logs_tab, text="日志")
+        self.logs_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.logs_tab, text="📜 日志")
         self._create_logs_tab()
+        
+        # 底部状态栏
+        self._create_status_bar()
+    
+    def _create_status_bar(self):
+        """创建底部状态栏"""
+        self.status_frame = ttk.Frame(self.root, bootstyle="secondary")
+        self.status_frame.pack(fill=X, padx=10, pady=(0, 10))
+        
+        self.status_label = ttk.Label(
+            self.status_frame, 
+            text="🟢 系统状态: 正常运行", 
+            bootstyle="inverse-success",
+            font=("Arial", 10)
+        )
+        self.status_label.pack(side=LEFT, padx=10, pady=5)
+        
+        self.stats_label = ttk.Label(
+            self.status_frame, 
+            text="节点: 0 | 任务: 0 | 完成: 0", 
+            font=("Arial", 10)
+        )
+        self.stats_label.pack(side=RIGHT, padx=10, pady=5)
     
     def _create_nodes_tab(self):
         """创建节点管理标签页"""
         # 节点列表
-        nodes_frame = ttk.LabelFrame(self.nodes_tab, text="可用节点")
-        nodes_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        nodes_frame = ttk.Labelframe(self.nodes_tab, text="可用节点", padding=10)
+        nodes_frame.pack(fill=BOTH, expand=YES, pady=(0, 10))
         
         columns = ("hostname", "ip", "status", "last_seen")
-        self.nodes_tree = ttk.Treeview(nodes_frame, columns=columns, show="headings")
+        self.nodes_tree = ttk.Treeview(
+            nodes_frame,
+            columns=columns,
+            show="headings",
+            bootstyle="info"
+        )
         
         self.nodes_tree.heading("hostname", text="主机名")
         self.nodes_tree.heading("ip", text="IP 地址")
         self.nodes_tree.heading("status", text="状态")
         self.nodes_tree.heading("last_seen", text="最后更新")
         
-        self.nodes_tree.column("hostname", width=150)
-        self.nodes_tree.column("ip", width=150)
-        self.nodes_tree.column("status", width=200)
-        self.nodes_tree.column("last_seen", width=200)
+        self.nodes_tree.column("hostname", width=80)
+        self.nodes_tree.column("ip", width=80)
+        self.nodes_tree.column("status", width=300)
+        self.nodes_tree.column("last_seen", width=150)
         
-        self.nodes_tree.pack(fill=tk.BOTH, expand=True)
+        self.nodes_tree.pack(fill=BOTH, expand=YES)
         
         # 按钮
         buttons_frame = ttk.Frame(self.nodes_tab)
-        buttons_frame.pack(fill=tk.X, padx=5, pady=5)
+        buttons_frame.pack(fill=X)
         
-        ttk.Button(buttons_frame, text="刷新节点", command=self._scan_nodes).pack(side=tk.LEFT, padx=5)
+        refresh_btn = ttk.Button(
+            buttons_frame,
+            text="🔄 刷新节点",
+            bootstyle="success",
+            command=self._scan_nodes  # 刷新节点 = 扫描节点（原逻辑）
+        )
+        refresh_btn.pack(side=LEFT, padx=5)
+        ToolTip(refresh_btn, text="扫描网络中的节点")
     
     def _create_tasks_tab(self):
         """创建任务管理标签页"""
         # 任务列表
-        tasks_frame = ttk.LabelFrame(self.tasks_tab, text="任务列表")
-        tasks_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tasks_frame = ttk.Labelframe(self.tasks_tab, text="任务列表", padding=10)
+        tasks_frame.pack(fill=BOTH, expand=YES, pady=(0, 10))
         
         columns = ("id", "input_file", "output_file", "status", "worker", "progress")
-        self.tasks_tree = ttk.Treeview(tasks_frame, columns=columns, show="headings")
+        self.tasks_tree = ttk.Treeview(
+            tasks_frame,
+            columns=columns,
+            show="headings",
+            bootstyle="primary"
+        )
         
         self.tasks_tree.heading("id", text="任务 ID")
         self.tasks_tree.heading("input_file", text="输入文件")
@@ -126,82 +169,140 @@ class ControllerApp:
         self.tasks_tree.column("worker", width=120)
         self.tasks_tree.column("progress", width=80)
         
-        self.tasks_tree.pack(fill=tk.BOTH, expand=True)
+        self.tasks_tree.pack(fill=BOTH, expand=YES)
         
         # 任务详情区域
-        details_frame = ttk.LabelFrame(self.tasks_tab, text="任务详情")
-        details_frame.pack(fill=tk.X, padx=5, pady=5)
+        details_frame = ttk.Labelframe(self.tasks_tab, text="任务详情", padding=10)
+        details_frame.pack(fill=X, pady=(0, 10))
         
-        self.task_details_text = scrolledtext.ScrolledText(details_frame, height=6, wrap=tk.WORD)
-        self.task_details_text.pack(fill=tk.X, padx=5, pady=5)
-        self.task_details_text.config(state=tk.DISABLED)
+        self.task_details_text = ScrolledText(details_frame, height=6, wrap=WORD, autohide=True)
+        self.task_details_text.pack(fill=X)
+        self.task_details_text.text.config(state=DISABLED)
         
         # 绑定选择事件
         self.tasks_tree.bind("<<TreeviewSelect>>", self._on_task_select)
         
         # 按钮
         buttons_frame = ttk.Frame(self.tasks_tab)
-        buttons_frame.pack(fill=tk.X, padx=5, pady=5)
+        buttons_frame.pack(fill=X)
         
-        ttk.Button(buttons_frame, text="刷新任务", command=self._refresh_tasks).pack(side=tk.LEFT, padx=5)
+        refresh_btn = ttk.Button(
+            buttons_frame, 
+            text="🔄 刷新任务", 
+            bootstyle="info",
+            command=self._refresh_tasks
+        )
+        refresh_btn.pack(side=LEFT, padx=5)
+        ToolTip(refresh_btn, text="刷新任务列表")
     
     def _create_transcode_tab(self):
         """创建转码配置标签页"""
         # 输入文件
-        input_frame = ttk.LabelFrame(self.transcode_tab, text="输入文件")
-        input_frame.pack(fill=tk.X, padx=5, pady=5)
+        input_frame = ttk.Labelframe(self.transcode_tab, text="输入文件", padding=10)
+        input_frame.pack(fill=X, pady=(0, 10))
         
-        self.input_path_var = tk.StringVar()
-        ttk.Entry(input_frame, textvariable=self.input_path_var, width=60).pack(side=tk.LEFT, padx=5)
-        ttk.Button(input_frame, text="浏览...", command=self._browse_input).pack(side=tk.LEFT, padx=5)
+        self.input_path_var = ttk.StringVar()
+        ttk.Entry(input_frame, textvariable=self.input_path_var, width=60).pack(side=LEFT, padx=5)
+        browse_input_btn = ttk.Button(
+            input_frame, 
+            text="📁 浏览...", 
+            bootstyle="secondary",
+            command=self._browse_input
+        )
+        browse_input_btn.pack(side=LEFT, padx=5)
+        ToolTip(browse_input_btn, text="选择要转码的视频文件")
         
         # 输出文件
-        output_frame = ttk.LabelFrame(self.transcode_tab, text="输出文件")
-        output_frame.pack(fill=tk.X, padx=5, pady=5)
+        output_frame = ttk.Labelframe(self.transcode_tab, text="输出文件", padding=10)
+        output_frame.pack(fill=X, pady=(0, 10))
         
-        self.output_path_var = tk.StringVar()
-        ttk.Entry(output_frame, textvariable=self.output_path_var, width=60).pack(side=tk.LEFT, padx=5)
-        ttk.Button(output_frame, text="浏览...", command=self._browse_output).pack(side=tk.LEFT, padx=5)
+        self.output_path_var = ttk.StringVar()
+        ttk.Entry(output_frame, textvariable=self.output_path_var, width=60).pack(side=LEFT, padx=5)
+        browse_output_btn = ttk.Button(
+            output_frame, 
+            text="📁 浏览...", 
+            bootstyle="secondary",
+            command=self._browse_output
+        )
+        browse_output_btn.pack(side=LEFT, padx=5)
+        ToolTip(browse_output_btn, text="选择输出文件位置")
         
         # 转码预设
-        preset_frame = ttk.LabelFrame(self.transcode_tab, text="转码预设")
-        preset_frame.pack(fill=tk.X, padx=5, pady=5)
+        preset_frame = ttk.Labelframe(self.transcode_tab, text="转码预设", padding=10)
+        preset_frame.pack(fill=X, pady=(0, 10))
         
-        ttk.Label(preset_frame, text="选择预设:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(preset_frame, text="选择预设:").pack(side=LEFT, padx=5)
         
-        self.preset_var = tk.StringVar()
-        preset_combo = ttk.Combobox(preset_frame, textvariable=self.preset_var, values=list_presets(), state="readonly")
-        preset_combo.pack(side=tk.LEFT, padx=5)
+        self.preset_var = ttk.StringVar()
+        preset_combo = ttk.Combobox(
+            preset_frame, 
+            textvariable=self.preset_var, 
+            values=list_presets(), 
+            state="readonly",
+            width=30
+        )
+        preset_combo.pack(side=LEFT, padx=5)
         preset_combo.set(list_presets()[0] if list_presets() else "")
         
         # 执行节点
-        node_frame = ttk.LabelFrame(self.transcode_tab, text="执行节点")
-        node_frame.pack(fill=tk.X, padx=5, pady=5)
+        node_frame = ttk.Labelframe(self.transcode_tab, text="执行节点", padding=10)
+        node_frame.pack(fill=X, pady=(0, 10))
         
-        ttk.Label(node_frame, text="选择节点:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(node_frame, text="选择节点:").pack(side=LEFT, padx=5)
         
-        self.node_var = tk.StringVar()
-        self.node_combo = ttk.Combobox(node_frame, textvariable=self.node_var, state="readonly")
-        self.node_combo.pack(side=tk.LEFT, padx=5)
+        self.node_var = ttk.StringVar()
+        self.node_combo = ttk.Combobox(
+            node_frame, 
+            textvariable=self.node_var, 
+            state="readonly",
+            width=30
+        )
+        self.node_combo.pack(side=LEFT, padx=5)
         
-        ttk.Button(node_frame, text="刷新", command=self._refresh_node_combo).pack(side=tk.LEFT, padx=5)
+        refresh_node_btn = ttk.Button(
+            node_frame, 
+            text="🔄", 
+            bootstyle="secondary", 
+            width=3,
+            command=self._refresh_node_combo
+        )
+        refresh_node_btn.pack(side=LEFT, padx=5)
+        ToolTip(refresh_node_btn, text="刷新节点列表")
         
         # 开始按钮
-        ttk.Button(self.transcode_tab, text="开始转码", command=self._start_transcode).pack(pady=20)
+        start_btn = ttk.Button(
+            self.transcode_tab, 
+            text="🚀 开始转码", 
+            bootstyle="primary",
+            width=20,
+            command=self._start_transcode
+        )
+        start_btn.pack(pady=20)
+        ToolTip(start_btn, text="点击开始转码任务")
     
     def _create_logs_tab(self):
         """创建日志标签页"""
-        self.log_text = scrolledtext.ScrolledText(self.logs_tab, wrap=tk.WORD)
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.log_text.config(state=tk.DISABLED)
+        self.log_text = ScrolledText(self.logs_tab, wrap=WORD, autohide=True)
+        self.log_text.pack(fill=BOTH, expand=YES)
+        self.log_text.text.config(state=DISABLED)
     
     def _log(self, message: str):
         """添加日志"""
-        self.log_text.config(state=tk.NORMAL)
+        self.log_text.text.config(state=NORMAL)
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self.log_text.insert(END, f"[{timestamp}] {message}\n")
+        self.log_text.see(END)
+        self.log_text.text.config(state=DISABLED)
+    
+    def _update_stats(self):
+        """更新状态栏统计"""
+        node_count = len(self.discovery.discovered_nodes)
+        task_count = len(self.controller.tasks)
+        completed_count = sum(1 for t in self.controller.tasks if t.status == "completed")
+        
+        self.stats_label.config(
+            text=f"节点: {node_count} | 任务: {task_count} | 完成: {completed_count}"
+        )
     
     def _on_node_discovered(self, node_info: dict):
         """节点发现回调"""
@@ -217,7 +318,7 @@ class ControllerApp:
             # 格式化状态显示
             status_raw = node_info.get("status", "unknown")
             status_display = self._format_node_status(status_raw)
-            self.nodes_tree.insert("", tk.END, values=(
+            self.nodes_tree.insert("", END, values=(
                 node_info.get("hostname", ""),
                 node_info.get("ip", ""),
                 status_display,
@@ -225,6 +326,7 @@ class ControllerApp:
             ))
         
         self._refresh_node_combo()
+        self._update_stats()
     
     def _format_node_status(self, status) -> str:
         """将节点状态转换为友好显示格式"""
@@ -261,7 +363,7 @@ class ControllerApp:
         for task in self.controller.tasks:
             # 状态显示友好格式
             status_display = self._format_status(task.status)
-            self.tasks_tree.insert("", tk.END, values=(
+            self.tasks_tree.insert("", END, values=(
                 task.id,
                 os.path.basename(task.input_file),  # 只显示文件名
                 os.path.basename(task.output_file),
@@ -269,6 +371,8 @@ class ControllerApp:
                 task.worker or "",
                 f"{task.progress}%"
             ), iid=task.id)  # 使用 task.id 作为 iid方便查找
+        
+        self._update_stats()
     
     def _format_status(self, status: str) -> str:
         """将状态转换为友好显示格式"""
@@ -305,10 +409,10 @@ class ControllerApp:
         if task.error:
             details += f"\n错误信息: {task.error}"
         
-        self.task_details_text.config(state=tk.NORMAL)
-        self.task_details_text.delete(1.0, tk.END)
-        self.task_details_text.insert(tk.END, details)
-        self.task_details_text.config(state=tk.DISABLED)
+        self.task_details_text.text.config(state=NORMAL)
+        self.task_details_text.delete("1.0", END)
+        self.task_details_text.insert(END, details)
+        self.task_details_text.text.config(state=DISABLED)
     
     def _refresh_node_combo(self):
         """刷新节点下拉框"""
@@ -365,15 +469,15 @@ class ControllerApp:
         worker_ip = self.node_var.get()
         
         if not input_path:
-            messagebox.showerror("错误", "请选择输入文件")
+            Messagebox.show_error("请选择输入文件", "错误")
             return
         
         if not output_path:
-            messagebox.showerror("错误", "请选择输出文件")
+            Messagebox.show_error("请选择输出文件", "错误")
             return
         
         if not worker_ip:
-            messagebox.showerror("错误", "请选择执行节点")
+            Messagebox.show_error("请选择执行节点", "错误")
             return
         
         # 获取预设参数
@@ -449,16 +553,20 @@ class ControllerApp:
                             os.path.basename(output_file),
                             output_path
                         )
-                    self.root.after(0, lambda: messagebox.showinfo("成功", f"转码完成: {output_path}"))
+                    self.root.after(0, lambda: Messagebox.show_info(
+                        f"转码完成: {output_path}", "成功"
+                    ))
                 else:
                     task.status = "failed"
                     self._log(f"任务 {task.id} 失败: {result.get('error')}")
-                    self.root.after(0, lambda: messagebox.showerror("失败", f"转码失败: {result.get('error')}"))
+                    self.root.after(0, lambda: Messagebox.show_error(
+                        f"转码失败: {result.get('error')}", "失败"
+                    ))
             except Exception as e:
                 task.status = "error"
                 task.error = str(e)
                 self._log(f"任务异常: {e}")
-                self.root.after(0, lambda: messagebox.showerror("错误", str(e)))
+                self.root.after(0, lambda: Messagebox.show_error(str(e), "错误"))
             
             self.root.after(0, self._refresh_tasks)
         
@@ -482,7 +590,11 @@ class ControllerApp:
 
 def main():
     """GUI 控制端入口"""
-    root = tk.Tk()
+    root = ttk.Window(
+        title="Transcoder Cluster - 控制端",
+        themename="cosmo",
+        size=(1255, 875)
+    )
     app = ControllerApp(root)
     
     def on_close():
