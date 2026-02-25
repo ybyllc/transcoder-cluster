@@ -38,11 +38,53 @@ def parse_ffmpeg_progress(line: str) -> Optional[float]:
     return None
 
 
+def get_ffmpeg_version(ffmpeg_path: str) -> Optional[str]:
+    """获取 FFmpeg 版本号。"""
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        first_line = result.stdout.splitlines()[0] if result.stdout else ""
+        match = re.search(r"ffmpeg version\s+([^\s]+)", first_line)
+        return match.group(1) if match else first_line or None
+    except Exception:
+        return None
+
+
+def list_ffmpeg_encoders(ffmpeg_path: str) -> list:
+    """获取 FFmpeg 支持的编码器列表。"""
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            return []
+
+        encoders = []
+        for line in result.stdout.splitlines():
+            # 示例: " V..... h264_nvenc           NVIDIA NVENC H.264 encoder"
+            match = re.match(r"^\s*[VAS\.]{6}\s+([^\s]+)\s+", line)
+            if match:
+                encoders.append(match.group(1))
+        return sorted(set(encoders))
+    except Exception:
+        return []
+
+
 class WorkerHandler(BaseHTTPRequestHandler):
     """Worker HTTP 请求处理器"""
 
     # 类级别变量，用于存储状态
     status: Dict[str, Any] = {"status": "idle", "current_task": None, "progress": 0}
+    capabilities: Dict[str, Any] = {}
     on_task_complete: Optional[Callable] = None
 
     def log_message(self, format: str, *args) -> None:
@@ -217,6 +259,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
             self._handle_ping()
         elif self.path == "/status":
             self._handle_status()
+        elif self.path == "/capabilities":
+            self._handle_capabilities()
         else:
             self.send_error(404, "Not Found")
 
@@ -252,6 +296,29 @@ class WorkerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(WorkerHandler.status).encode())
+
+    @classmethod
+    def _build_capabilities(cls) -> Dict[str, Any]:
+        """构建并缓存节点能力信息。"""
+        ffmpeg_version = get_ffmpeg_version(config.ffmpeg_path)
+        encoders = list_ffmpeg_encoders(config.ffmpeg_path) if ffmpeg_version else []
+        nvenc_supported = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
+
+        cls.capabilities = {
+            "ffmpeg_installed": bool(ffmpeg_version),
+            "ffmpeg_version": ffmpeg_version,
+            "encoders": encoders,
+            "nvenc_supported": nvenc_supported,
+        }
+        return cls.capabilities
+
+    def _handle_capabilities(self) -> None:
+        """处理能力查询请求。"""
+        capabilities = WorkerHandler.capabilities or WorkerHandler._build_capabilities()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(capabilities).encode())
 
 
 class Worker:
