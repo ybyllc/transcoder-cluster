@@ -24,188 +24,101 @@ jobs:
         pip install pyinstaller
         pip install -e .
     
-    - name: Build EXE
+    - name: Build Worker EXE
       run: |
-        pyinstaller scripts/build.spec --clean --noconfirm
+        pyinstaller --onefile --windowed--name tc-worker-gui `
+          --hidden-import=transcoder_cluster `
+          --hidden-import=transcoder_cluster.core `
+          --hidden-import=transcoder_cluster.core.worker `
+          --hidden-import=transcoder_cluster.core.controller `
+          --hidden-import=transcoder_cluster.core.discovery `
+          --hidden-import=transcoder_cluster.transcode `
+          --hidden-import=transcoder_cluster.transcode.ffmpeg_wrapper `
+          --hidden-import=transcoder_cluster.transcode.presets `
+          --hidden-import=transcoder_cluster.utils `
+          --hidden-import=transcoder_cluster.utils.config `
+          --hidden-import=transcoder_cluster.utils.logger `
+          --hidden-import=requests `
+          --hidden-import=ffmpeg `
+          --collect-all requests `
+          --collect-all certifi `
+          gui/worker_app.py --clean --noconfirm
     
-    - name: Create distribution package
+    - name: Build Controller EXE
       run: |
-        $version = "${{ github.ref_name }}"
-        $zipName = "transcoder-cluster-windows-$version"
-        
-        # 创建临时目录
-        New-Item -ItemType Directory -Path "dist\$zipName"
-        
-        # 复制 EXE 文件夹
-        Copy-Item -Path "dist\tc-worker-gui" -Destination "dist\$zipName\tc-worker-gui" -Recurse
-        Copy-Item -Path "dist\tc-control-gui" -Destination "dist\$zipName\tc-control-gui" -Recurse
-        
-        # 复制文档
-        Copy-Item -Path "README.md" -Destination "dist\$zipName\"
-        Copy-Item -Path "LICENSE" -Destination "dist\$zipName\"
-        
-        # 创建压缩包
-        Compress-Archive -Path "dist\$zipName" -DestinationPath "dist\$zipName.zip"
+        pyinstaller --onefile --windowed --name tc-control-gui `
+          --hidden-import=transcoder_cluster `
+          --hidden-import=transcoder_cluster.core `
+          --hidden-import=transcoder_cluster.core.worker `
+          --hidden-import=transcoder_cluster.core.controller `
+          --hidden-import=transcoder_cluster.core.discovery `
+          --hidden-import=transcoder_cluster.transcode `
+          --hidden-import=transcoder_cluster.transcode.ffmpeg_wrapper `
+          --hidden-import=transcoder_cluster.transcode.presets `
+          --hidden-import=transcoder_cluster.utils `
+          --hidden-import=transcoder_cluster.utils.config `
+          --hidden-import=transcoder_cluster.utils.logger `
+          --hidden-import=requests `
+          --hidden-import=ffmpeg `
+          --collect-all requests `
+          --collect-all certifi `
+          gui/controller_app.py --clean --noconfirm
     
-    - name: Upload artifact
+    - name: Upload Worker EXE
       uses: actions/upload-artifact@v4
       with:
-        name: windows-build
-        path: dist/*.zip
-
-  build-macos:
-    runs-on: macos-latest
+        name: tc-worker-gui
+        path: dist/tc-worker-gui.exe
     
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        pip install -e .
-    
-    - name: Build APP
-      run: |
-        pyinstaller scripts/build.spec --clean --noconfirm
-    
-    - name: Create distribution package
-      run: |
-        version="${{ github.ref_name }}"
-        zipName="transcoder-cluster-macos-$version"
-        
-        # 创建目录
-        mkdir -p "dist/$zipName"
-        
-        # 复制 APP 文件夹
-        cp -r "dist/tc-worker-gui" "dist/$zipName/"
-        cp -r "dist/tc-control-gui" "dist/$zipName/"
-        
-        # 复制文档
-        cp README.md "dist/$zipName/"
-        cp LICENSE "dist/$zipName/"
-        
-        # 创建压缩包
-        cd dist
-        zip -r "$zipName.zip" "$zipName"
-    
-    - name: Upload artifact
+    - name: Upload Controller EXE
       uses: actions/upload-artifact@v4
       with:
-        name: macos-build
-        path: dist/*.zip
-
-  build-linux:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y python3-tk
-    
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        pip install -e .
-    
-    - name: Build executable
-      run: |
-        pyinstaller scripts/build.spec --clean --noconfirm
-    
-    - name: Create distribution package
-      run: |
-        version="${{ github.ref_name }}"
-        zipName="transcoder-cluster-linux-$version"
-        
-        # 创建目录
-        mkdir -p "dist/$zipName"
-        
-        # 复制可执行文件夹
-        cp -r "dist/tc-worker-gui" "dist/$zipName/"
-        cp -r "dist/tc-control-gui" "dist/$zipName/"
-        
-        # 复制文档
-        cp README.md "dist/$zipName/"
-        cp LICENSE "dist/$zipName/"
-        
-        # 创建压缩包
-        cd dist
-        zip -r "$zipName.zip" "$zipName"
-    
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: linux-build
-        path: dist/*.zip
+        name: tc-control-gui
+        path: dist/tc-control-gui.exe
 
   release:
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Download Windows artifact
+    - name: Download Worker EXE
       uses: actions/download-artifact@v4
       with:
-        name: windows-build
-        path: artifacts/windows
+        name: tc-worker-gui
+        path: artifacts/
     
-    - name: Download macOS artifact
+    - name: Download Controller EXE
       uses: actions/download-artifact@v4
       with:
-        name: macos-build
-        path: artifacts/macos
-    
-    - name: Download Linux artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: linux-build
-        path: artifacts/linux
+        name: tc-control-gui
+        path: artifacts/
     
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          artifacts/windows/*.zip
-          artifacts/macos/*.zip
-          artifacts/linux/*.zip
+          artifacts/tc-worker-gui.exe
+          artifacts/tc-control-gui.exe
         body: |
           # Transcoder Cluster ${{ github.ref_name }}
           
-          ## 📥 下载
+          ##📥 下载
           
-          | 平台 | 文件 |
+          | 文件 | 说明 |
           |------|------|
-          | Windows | `transcoder-cluster-windows-${{ github.ref_name }}.zip` |
-          | macOS | `transcoder-cluster-macos-${{ github.ref_name }}.zip` |
-          | Linux | `transcoder-cluster-linux-${{ github.ref_name }}.zip` |
+          | `tc-worker-gui.exe` | Worker 节点程序 |
+          | `tc-control-gui.exe` | 控制端程序 |
           
           ## 🚀 使用方法
           
-          1. 下载对应平台的压缩包
-          2. 解压到任意目录
-          3. 运行 `tc-worker-gui` 或 `tc-control-gui`
+          1. 下载 EXE 文件
+          2. 双击运行即可（无需安装）
           
           ## ⚠️ 注意事项
           
-          - **需要安装 FFmpeg** 才能进行视频转码
-          - Windows 用户可能需要允许防火墙通过
+          - **需要安装 FFmpeg** 并添加到系统 PATH 才能进行视频转码
+          - 首次运行可能需要允许防火墙通过
           
           ## 📝 更新日志
           

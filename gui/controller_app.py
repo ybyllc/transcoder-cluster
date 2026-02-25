@@ -101,8 +101,7 @@ class ControllerApp:
         buttons_frame = ttk.Frame(self.nodes_tab)
         buttons_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Button(buttons_frame, text="刷新节点", command=self._refresh_nodes).pack(side=tk.LEFT, padx=5)
-        ttk.Button(buttons_frame, text="扫描节点", command=self._scan_nodes).pack(side=tk.LEFT, padx=5)
+        ttk.Button(buttons_frame, text="刷新节点", command=self._scan_nodes).pack(side=tk.LEFT, padx=5)
     
     def _create_tasks_tab(self):
         """创建任务管理标签页"""
@@ -128,6 +127,17 @@ class ControllerApp:
         self.tasks_tree.column("progress", width=80)
         
         self.tasks_tree.pack(fill=tk.BOTH, expand=True)
+        
+        # 任务详情区域
+        details_frame = ttk.LabelFrame(self.tasks_tab, text="任务详情")
+        details_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.task_details_text = scrolledtext.ScrolledText(details_frame, height=6, wrap=tk.WORD)
+        self.task_details_text.pack(fill=tk.X, padx=5, pady=5)
+        self.task_details_text.config(state=tk.DISABLED)
+        
+        # 绑定选择事件
+        self.tasks_tree.bind("<<TreeviewSelect>>", self._on_task_select)
         
         # 按钮
         buttons_frame = ttk.Frame(self.tasks_tab)
@@ -204,14 +214,44 @@ class ControllerApp:
             self.nodes_tree.delete(item)
         
         for node_key, node_info in self.discovery.discovered_nodes.items():
+            # 格式化状态显示
+            status_raw = node_info.get("status", "unknown")
+            status_display = self._format_node_status(status_raw)
             self.nodes_tree.insert("", tk.END, values=(
                 node_info.get("hostname", ""),
                 node_info.get("ip", ""),
-                node_info.get("status", "unknown"),
+                status_display,
                 node_info.get("last_seen", "")
             ))
         
         self._refresh_node_combo()
+    
+    def _format_node_status(self, status) -> str:
+        """将节点状态转换为友好显示格式"""
+        # 如果 status 是字典，提取相关信息
+        if isinstance(status, dict):
+            node_status = status.get("status", "unknown")
+            progress = status.get("progress", 0)
+            if node_status == "processing":
+                return f"🔄 处理中 ({progress}%)"
+            elif node_status == "completed":
+                return "✅ 空闲"
+            elif node_status == "idle":
+                return "✅ 空闲"
+            elif node_status == "error":
+                return f"⚠️ 错误"
+            else:
+                return f"📊 {node_status}"
+        
+        # 如果是字符串
+        status_map = {
+            "idle": "✅ 空闲",
+            "processing": "🔄 处理中",
+            "completed": "✅ 空闲",
+            "error": "⚠️ 错误",
+            "unknown": "❓ 未知"
+        }
+        return status_map.get(status, str(status))
     
     def _refresh_tasks(self):
         """刷新任务列表"""
@@ -219,14 +259,56 @@ class ControllerApp:
             self.tasks_tree.delete(item)
         
         for task in self.controller.tasks:
+            # 状态显示友好格式
+            status_display = self._format_status(task.status)
             self.tasks_tree.insert("", tk.END, values=(
                 task.id,
-                task.input_file,
-                task.output_file,
-                task.status,
+                os.path.basename(task.input_file),  # 只显示文件名
+                os.path.basename(task.output_file),
+                status_display,
                 task.worker or "",
                 f"{task.progress}%"
-            ))
+            ), iid=task.id)  # 使用 task.id 作为 iid方便查找
+    
+    def _format_status(self, status: str) -> str:
+        """将状态转换为友好显示格式"""
+        status_map = {
+            "pending": "⏳ 等待中",
+            "uploading": "📤 上传中",
+            "processing": "🔄 处理中",
+            "completed": "✅ 已完成",
+            "failed": "❌ 失败",
+            "error": "⚠️ 错误"
+        }
+        return status_map.get(status, status)
+    
+    def _on_task_select(self, event):
+        """任务选择事件处理"""
+        selection = self.tasks_tree.selection()
+        if not selection:
+            return
+        
+        task_id = selection[0]
+        task = next((t for t in self.controller.tasks if t.id == task_id), None)
+        if not task:
+            return
+        
+        # 格式化显示任务详情
+        details = f"""任务 ID: {task.id}
+状态: {self._format_status(task.status)}
+进度: {task.progress}%
+输入文件: {task.input_file}
+输出文件: {task.output_file}
+执行节点: {task.worker or '未分配'}
+创建时间: {task.create_time}"""
+        
+        if task.error:
+            details += f"\n错误信息: {task.error}"
+        
+        self.task_details_text.config(state=tk.NORMAL)
+        self.task_details_text.delete(1.0, tk.END)
+        self.task_details_text.insert(tk.END, details)
+        self.task_details_text.config(state=tk.DISABLED)
     
     def _refresh_node_combo(self):
         """刷新节点下拉框"""
@@ -314,21 +396,37 @@ class ControllerApp:
             try:
                 # 启动一个线程定期更新进度
                 stop_progress_update = threading.Event()
+                last_worker_status = [None]  # 用于跟踪上一次的 Worker 状态
                 
                 def update_progress():
                     """定期从 Worker 获取进度并更新任务"""
                     while not stop_progress_update.is_set():
                         try:
                             status = self.controller.get_worker_status(worker_ip)
-                            if status.get("status") == "processing":
-                                task.progress = status.get("progress", 0)
+                            current_status = status.get("status")
+                            
+                            # 状态变化时更新
+                            if current_status == "processing":
+                                progress = status.get("progress", 0)
+                                task.progress = progress
                                 task.status = "processing"
                                 self.root.after(0, self._refresh_tasks)
-                            elif status.get("status") == "completed":
-                                task.progress = 100
-                                task.status = "completed"
-                                self.root.after(0, self._refresh_tasks)
-                                break
+                                last_worker_status[0] = "processing"
+                            elif current_status == "completed":
+                                # 只有之前是 processing 才认为任务完成
+                                if last_worker_status[0] == "processing":
+                                    task.progress = 100
+                                    task.status = "completed"
+                                    self.root.after(0, self._refresh_tasks)
+                                    break
+                            elif current_status == "idle":
+                                # Worker 空闲，说明还没开始或已完成
+                                if last_worker_status[0] == "processing":
+                                    # 从 processing 变为 idle，说明完成了
+                                    task.progress = 100
+                                    task.status = "completed"
+                                    self.root.after(0, self._refresh_tasks)
+                                    break
                         except Exception:
                             pass
                         stop_progress_update.wait(0.5)  # 每0.5秒更新一次
