@@ -76,9 +76,12 @@ class ControllerApp:
         self.left_panel_frame.pack(side=LEFT, fill=Y, padx=(0, 10))
         self.left_panel_frame.pack_propagate(False)
 
-        self.left_canvas = tk.Canvas(self.left_panel_frame, highlightthickness=0)
+        self.left_scroll_container = ttk.Frame(self.left_panel_frame)
+        self.left_scroll_container.pack(side=TOP, fill=BOTH, expand=YES)
+
+        self.left_canvas = tk.Canvas(self.left_scroll_container, highlightthickness=0)
         self.left_scrollbar = ttk.Scrollbar(
-            self.left_panel_frame,
+            self.left_scroll_container,
             orient=VERTICAL,
             command=self.left_canvas.yview,
         )
@@ -91,6 +94,9 @@ class ControllerApp:
         self.left_frame.bind("<Configure>", self._on_left_content_configure)
         self.left_canvas.bind("<Configure>", self._on_left_canvas_configure)
 
+        self.left_action_frame = ttk.Frame(self.left_panel_frame, padding=(0, 8, 0, 0))
+        self.left_action_frame.pack(side=BOTTOM, fill=X)
+
         self.right_frame = ttk.Frame(content_frame)
         self.right_frame.pack(side=LEFT, fill=BOTH, expand=YES)
 
@@ -98,6 +104,7 @@ class ControllerApp:
         self.bottom_frame.pack(fill=X, pady=(10, 0))
 
         self._create_left_flow_panel()
+        self._create_left_action_panel()
         self._create_right_file_panel()
         self._create_bottom_status_panel()
         self._bind_left_scroll_widgets(self.left_frame)
@@ -163,8 +170,12 @@ class ControllerApp:
         self.max_height_var = ttk.StringVar(value="")
         ttk.Entry(size_row, textvariable=self.max_height_var, width=8).pack(side=LEFT, padx=(4, 0))
 
-        self.codec_support_var = ttk.StringVar(value="编码器支持: 等待节点信息")
-        ttk.Label(cfg_frame, textvariable=self.codec_support_var, bootstyle="info", wraplength=320).grid(row=4, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        self.codec_support_var = ttk.StringVar(value="编码器支持: 等待节点")
+        ttk.Label(
+            cfg_frame,
+            textvariable=self.codec_support_var,
+            bootstyle="info",
+        ).grid(row=4, column=0, columnspan=2, sticky=W, pady=(6, 0))
 
         dispatch_frame = ttk.Labelframe(self.left_frame, text="步骤 4: 派发模式", padding=10)
         dispatch_frame.pack(fill=X, pady=(0, 8))
@@ -183,14 +194,22 @@ class ControllerApp:
 
         ttk.Button(single_row, text="刷新", width=6, bootstyle="secondary", command=self._broadcast_discovery).pack(side=LEFT, padx=(6, 0))
 
-        run_frame = ttk.Labelframe(self.left_frame, text="步骤 5: 开始转码", padding=10)
-        run_frame.pack(fill=X)
-
-        self.start_btn = ttk.Button(run_frame, text="开始转码", bootstyle="success", command=self._start_transcode)
-        self.start_btn.pack(fill=X)
-
         self._on_preset_changed()
         self._on_dispatch_mode_changed()
+
+    def _create_left_action_panel(self):
+        """左侧固定底部操作区，始终可见。"""
+        run_frame = ttk.Labelframe(self.left_action_frame, text="步骤 5: 开始转码", padding=10)
+        run_frame.pack(fill=X)
+
+        self.start_btn = ttk.Button(
+            run_frame,
+            text="开始转码",
+            bootstyle="success",
+            command=self._start_transcode,
+            padding=(8, 10),
+        )
+        self.start_btn.pack(fill=X)
 
     def _create_right_file_panel(self):
         files_frame = ttk.Labelframe(self.right_frame, text="文件列表与任务进度", padding=8)
@@ -456,23 +475,21 @@ class ControllerApp:
         codec = self.codec_var.get().strip()
         workers = self._get_discovered_worker_ips()
         if not workers:
-            self.codec_support_var.set("编码器支持: 暂无节点在线")
+            self.codec_support_var.set("编码器支持: 无节点")
             return
 
         if "_nvenc" not in codec:
-            self.codec_support_var.set(f"编码器支持: {codec}（软件编码，无需节点能力检测）")
+            self.codec_support_var.set(f"编码器支持: {codec}（软件）")
             return
 
         support_count = sum(1 for ip in workers if self._worker_supports_codec(ip, codec))
         known_count = sum(1 for ip in workers if ip in self.node_capabilities)
         if known_count < len(workers):
             self.codec_support_var.set(
-                f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}（能力检测中 {known_count}/{len(workers)}）"
+                f"编码器支持: {codec} {support_count}/{len(workers)}（检测 {known_count}/{len(workers)}）"
             )
         else:
-            self.codec_support_var.set(
-                f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}"
-            )
+            self.codec_support_var.set(f"编码器支持: {codec} {support_count}/{len(workers)}")
 
     def _start_transcode(self):
         if self.running:
@@ -848,7 +865,7 @@ def main():
     root = ttk.Window(
         title="Transcoder Cluster - 控制端",
         themename="cosmo",
-        size=(1500, 1020),
+        size=(1700, 1250),
     )
     app = ControllerApp(root)
 
