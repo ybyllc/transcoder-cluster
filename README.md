@@ -22,32 +22,6 @@
 
 ---
 
-## 📊 项目数据
-
-<div align="center">
-
-![GitHub Stats](https://github-readme-stats.vercel.app/api?username=ybyllc&repo=transcoder-cluster&show_icons=true&theme=tokyonight&hide_border=true&count_private=true)
-
-![GitHub Activity](https://github-readme-stats.vercel.app/api/graph?username=ybyllc&repo=transcoder-cluster&theme=tokyonight&hide_border=true)
-
-![Top Langs](https://github-readme-stats.vercel.app/api/top-langs/?username=ybyllc&layout=compact&theme=tokyonight&hide_border=true)
-
-</div>
-
----
-
-## ⭐ Star History
-
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=ybyllc/transcoder-cluster&type=Date)](https://star-history.com/#ybyllc/transcoder-cluster&Date)
-
-**[⭐ 给个 Star 支持项目发展 ⭐](https://github.com/ybyllc/transcoder-cluster)**
-
-</div>
-
----
-
 ## 🔥 项目亮点
 
 <div align="center">
@@ -588,7 +562,7 @@ PRESETS["my_custom_preset"] = TranscodePreset(
 
 **如果这个项目对你有帮助，请给一个 ⭐ Star 支持一下！**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ybyllc/transcoder-cluster&type=Date)](https://star-history.com/#ybyllc/transcoder-cluster&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=ybyllc/transcoder-cluster&type=date&legend=top-left)](https://www.star-history.com/#ybyllc/transcoder-cluster&type=date&legend=top-left)
 
 **Made with ❤️ by [一杯原谅绿茶](https://github.com/ybyllc)**
 
