@@ -132,21 +132,41 @@ class WorkerHandler(BaseHTTPRequestHandler):
         logger.info(f"开始转码: {' '.join(cmd)}")
 
         try:
-            proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            # Windows 上隐藏 ffmpeg 命令行窗口
+            startupinfo = None
+            creationflags = 0
+            if os.name == 'nt':  # Windows
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
+            proc = subprocess.Popen(
+                cmd,
+                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,  # ffmpeg 主要用 stderr 输出进度
+                text=True,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
 
             # 获取视频时长
             duration = self._get_video_duration(input_path)
 
             # 实时读取进度
             last_percent = -1
+            last_log_percent = -1
             for line in proc.stderr:
                 sec = parse_ffmpeg_progress(line)
                 if sec and duration:
                     percent = int(sec / duration * 100)
                     if percent != last_percent:
                         WorkerHandler.status["progress"] = percent
-                        logger.debug(f"转码进度: {percent}%")
                         last_percent = percent
+                    # 每10%输出一次日志
+                    if percent >= last_log_percent + 10:
+                        logger.info(f"转码进度: {percent}%")
+                        last_log_percent = percent
 
             proc.wait()
 

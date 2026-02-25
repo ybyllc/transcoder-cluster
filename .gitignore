@@ -3,6 +3,11 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# PyInstaller build
+build/
+dist/
+*.spec.bak
+
 # Project specific
 worker_files/
 input/

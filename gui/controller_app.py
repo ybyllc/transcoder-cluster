@@ -312,8 +312,36 @@ class ControllerApp:
         # 提交任务
         def submit_task():
             try:
+                # 启动一个线程定期更新进度
+                stop_progress_update = threading.Event()
+                
+                def update_progress():
+                    """定期从 Worker 获取进度并更新任务"""
+                    while not stop_progress_update.is_set():
+                        try:
+                            status = self.controller.get_worker_status(worker_ip)
+                            if status.get("status") == "processing":
+                                task.progress = status.get("progress", 0)
+                                task.status = "processing"
+                                self.root.after(0, self._refresh_tasks)
+                            elif status.get("status") == "completed":
+                                task.progress = 100
+                                task.status = "completed"
+                                self.root.after(0, self._refresh_tasks)
+                                break
+                        except Exception:
+                            pass
+                        stop_progress_update.wait(0.5)  # 每0.5秒更新一次
+                
+                progress_thread = threading.Thread(target=update_progress, daemon=True)
+                progress_thread.start()
+                
                 result = self.controller.submit_task(task, worker_ip)
+                stop_progress_update.set()  # 停止进度更新线程
+                
                 if result.get("status") == "success":
+                    task.status = "completed"
+                    task.progress = 100
                     self._log(f"任务 {task.id} 完成")
                     # 下载结果
                     output_file = result.get("output_file")
@@ -325,9 +353,12 @@ class ControllerApp:
                         )
                     self.root.after(0, lambda: messagebox.showinfo("成功", f"转码完成: {output_path}"))
                 else:
+                    task.status = "failed"
                     self._log(f"任务 {task.id} 失败: {result.get('error')}")
                     self.root.after(0, lambda: messagebox.showerror("失败", f"转码失败: {result.get('error')}"))
             except Exception as e:
+                task.status = "error"
+                task.error = str(e)
                 self._log(f"任务异常: {e}")
                 self.root.after(0, lambda: messagebox.showerror("错误", str(e)))
             
