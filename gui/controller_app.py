@@ -1,606 +1,816 @@
 #!/usr/bin/env python3
 """
-GUI 控制端应用
-
-提供图形界面的任务管理和节点监控
-使用 ttkbootstrap 实现现代化界面
+GUI 控制端应用（单页流程工作台）
 """
 
+import json
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
-from datetime import datetime
+import time
+import zipfile
+from tkinter import filedialog
+from typing import Any, Dict, List, Optional
 
+import requests
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from ttkbootstrap.scrolled import ScrolledText
-from ttkbootstrap.tooltip import ToolTip
 from ttkbootstrap.dialogs import Messagebox
-from tkinter import filedialog
+from ttkbootstrap.tooltip import ToolTip
 
-from transcoder_cluster.core.controller import Controller
+from transcoder_cluster import __version__
+from transcoder_cluster.core.controller import Controller, Task
 from transcoder_cluster.core.discovery import DiscoveryService
-from transcoder_cluster.transcode.presets import list_presets, get_preset
+from transcoder_cluster.transcode.presets import get_preset, list_presets
 from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
+CODEC_OPTIONS = ["libx265", "libx264", "hevc_nvenc", "h264_nvenc"]
+
 
 class ControllerApp:
-    """GUI 控制端应用"""
-    
+    """GUI 控制端应用。"""
+
     def __init__(self, root: ttk.Window):
         self.root = root
-        
-        # 初始化控制器
         self.controller = Controller()
-        
-        # 发现服务
-        self.discovery = DiscoveryService(
-            on_node_discovered=self._on_node_discovered
-        )
-        
-        # 创建界面
+        self.discovery = DiscoveryService(on_node_discovered=self._on_node_discovered)
+
+        self.selected_files: List[str] = []
+        self.file_info_map: Dict[str, str] = {}
+        self.current_tasks: List[Task] = []
+        self.node_capabilities: Dict[str, Dict[str, Any]] = {}
+        self.node_runtime_status: Dict[str, Dict[str, Any]] = {}
+        self._capabilities_fetching: set = set()
+
+        self.running = False
+        self.dispatch_thread: Optional[threading.Thread] = None
+        self.dispatch_stop_event = threading.Event()
+        self._last_discovery_time = 0.0
+
+        self.user_config_path = os.path.join(os.getcwd(), "controller_gui_config.json")
+        self._load_user_config()
+
         self._create_ui()
-        
-        # 启动发现服务
+        self._check_local_ffmpeg()
+        self._refresh_nodes_tree()
+
         self.discovery.start()
-        
-        # 定时刷新
+        self._broadcast_discovery()
         self._schedule_refresh()
-    
+
     def _create_ui(self):
-        """创建用户界面"""
-        # 创建主框架
-        self.main_frame = ttk.Frame(self.root, padding=10)
-        self.main_frame.pack(fill=BOTH, expand=YES)
-        
-        # 创建标签页
-        self.notebook = ttk.Notebook(self.main_frame)
-        self.notebook.pack(fill=BOTH, expand=YES)
-        
-        # 节点管理标签页
-        self.nodes_tab = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.nodes_tab, text="📡 节点管理")
-        self._create_nodes_tab()
-        
-        # 任务管理标签页
-        self.tasks_tab = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.tasks_tab, text="📋 任务管理")
-        self._create_tasks_tab()
-        
-        # 转码配置标签页
-        self.transcode_tab = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.transcode_tab, text="⚙️ 转码配置")
-        self._create_transcode_tab()
-        
-        # 日志标签页
-        self.logs_tab = ttk.Frame(self.notebook, padding=10)
-        self.notebook.add(self.logs_tab, text="📜 日志")
-        self._create_logs_tab()
-        
-        # 底部状态栏
-        self._create_status_bar()
-    
-    def _create_status_bar(self):
-        """创建底部状态栏"""
-        self.status_frame = ttk.Frame(self.root, bootstyle="secondary")
-        self.status_frame.pack(fill=X, padx=10, pady=(0, 10))
-        
-        self.status_label = ttk.Label(
-            self.status_frame, 
-            text="🟢 系统状态: 正常运行", 
-            bootstyle="inverse-success",
-            font=("Arial", 10)
+        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame.pack(fill=BOTH, expand=YES)
+
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=BOTH, expand=YES)
+
+        self.left_frame = ttk.Frame(content_frame, width=420)
+        self.left_frame.pack(side=LEFT, fill=Y, padx=(0, 10))
+        self.left_frame.pack_propagate(False)
+
+        self.right_frame = ttk.Frame(content_frame)
+        self.right_frame.pack(side=LEFT, fill=BOTH, expand=YES)
+
+        self.bottom_frame = ttk.Frame(main_frame)
+        self.bottom_frame.pack(fill=X, pady=(10, 0))
+
+        self._create_left_flow_panel()
+        self._create_right_file_panel()
+        self._create_bottom_status_panel()
+
+    def _create_left_flow_panel(self):
+        sys_frame = ttk.Labelframe(self.left_frame, text="步骤 1: 环境检查", padding=10)
+        sys_frame.pack(fill=X, pady=(0, 8))
+
+        ttk.Label(sys_frame, text=f"软件版本: {__version__}", font=("Arial", 10)).pack(anchor=W)
+
+        self.ffmpeg_version_var = ttk.StringVar(value="FFmpeg: 检测中...")
+        ttk.Label(sys_frame, textvariable=self.ffmpeg_version_var, font=("Arial", 10)).pack(anchor=W, pady=(6, 0))
+
+        ffmpeg_btn_frame = ttk.Frame(sys_frame)
+        ffmpeg_btn_frame.pack(fill=X, pady=(8, 0))
+
+        self.install_ffmpeg_btn = ttk.Button(
+            ffmpeg_btn_frame,
+            text="安装 FFmpeg",
+            bootstyle="warning",
+            command=self._install_ffmpeg,
         )
-        self.status_label.pack(side=LEFT, padx=10, pady=5)
-        
-        self.stats_label = ttk.Label(
-            self.status_frame, 
-            text="节点: 0 | 任务: 0 | 完成: 0", 
-            font=("Arial", 10)
-        )
-        self.stats_label.pack(side=RIGHT, padx=10, pady=5)
-    
-    def _create_nodes_tab(self):
-        """创建节点管理标签页"""
-        # 节点列表
-        nodes_frame = ttk.Labelframe(self.nodes_tab, text="可用节点", padding=10)
-        nodes_frame.pack(fill=BOTH, expand=YES, pady=(0, 10))
-        
-        columns = ("hostname", "ip", "status", "last_seen")
-        self.nodes_tree = ttk.Treeview(
-            nodes_frame,
-            columns=columns,
-            show="headings",
-            bootstyle="info"
-        )
-        
-        self.nodes_tree.heading("hostname", text="主机名")
-        self.nodes_tree.heading("ip", text="IP 地址")
-        self.nodes_tree.heading("status", text="状态")
-        self.nodes_tree.heading("last_seen", text="最后更新")
-        
-        self.nodes_tree.column("hostname", width=80)
-        self.nodes_tree.column("ip", width=80)
-        self.nodes_tree.column("status", width=300)
-        self.nodes_tree.column("last_seen", width=150)
-        
-        self.nodes_tree.pack(fill=BOTH, expand=YES)
-        
-        # 按钮
-        buttons_frame = ttk.Frame(self.nodes_tab)
-        buttons_frame.pack(fill=X)
-        
-        refresh_btn = ttk.Button(
-            buttons_frame,
-            text="🔄 刷新节点",
-            bootstyle="success",
-            command=self._scan_nodes  # 刷新节点 = 扫描节点（原逻辑）
-        )
-        refresh_btn.pack(side=LEFT, padx=5)
-        ToolTip(refresh_btn, text="扫描网络中的节点")
-    
-    def _create_tasks_tab(self):
-        """创建任务管理标签页"""
-        # 任务列表
-        tasks_frame = ttk.Labelframe(self.tasks_tab, text="任务列表", padding=10)
-        tasks_frame.pack(fill=BOTH, expand=YES, pady=(0, 10))
-        
-        columns = ("id", "input_file", "output_file", "status", "worker", "progress")
-        self.tasks_tree = ttk.Treeview(
-            tasks_frame,
-            columns=columns,
-            show="headings",
-            bootstyle="primary"
-        )
-        
-        self.tasks_tree.heading("id", text="任务 ID")
-        self.tasks_tree.heading("input_file", text="输入文件")
-        self.tasks_tree.heading("output_file", text="输出文件")
-        self.tasks_tree.heading("status", text="状态")
-        self.tasks_tree.heading("worker", text="执行节点")
-        self.tasks_tree.heading("progress", text="进度")
-        
-        self.tasks_tree.column("id", width=100)
-        self.tasks_tree.column("input_file", width=200)
-        self.tasks_tree.column("output_file", width=200)
-        self.tasks_tree.column("status", width=100)
-        self.tasks_tree.column("worker", width=120)
-        self.tasks_tree.column("progress", width=80)
-        
-        self.tasks_tree.pack(fill=BOTH, expand=YES)
-        
-        # 任务详情区域
-        details_frame = ttk.Labelframe(self.tasks_tab, text="任务详情", padding=10)
-        details_frame.pack(fill=X, pady=(0, 10))
-        
-        self.task_details_text = ScrolledText(details_frame, height=6, wrap=WORD, autohide=True)
-        self.task_details_text.pack(fill=X)
-        self.task_details_text.text.config(state=DISABLED)
-        
-        # 绑定选择事件
-        self.tasks_tree.bind("<<TreeviewSelect>>", self._on_task_select)
-        
-        # 按钮
-        buttons_frame = ttk.Frame(self.tasks_tab)
-        buttons_frame.pack(fill=X)
-        
-        refresh_btn = ttk.Button(
-            buttons_frame, 
-            text="🔄 刷新任务", 
-            bootstyle="info",
-            command=self._refresh_tasks
-        )
-        refresh_btn.pack(side=LEFT, padx=5)
-        ToolTip(refresh_btn, text="刷新任务列表")
-    
-    def _create_transcode_tab(self):
-        """创建转码配置标签页"""
-        # 输入文件
-        input_frame = ttk.Labelframe(self.transcode_tab, text="输入文件", padding=10)
-        input_frame.pack(fill=X, pady=(0, 10))
-        
-        self.input_path_var = ttk.StringVar()
-        ttk.Entry(input_frame, textvariable=self.input_path_var, width=60).pack(side=LEFT, padx=5)
-        browse_input_btn = ttk.Button(
-            input_frame, 
-            text="📁 浏览...", 
+        self.install_ffmpeg_btn.pack(side=LEFT)
+        ToolTip(self.install_ffmpeg_btn, text="检测不到 FFmpeg 时可自动下载安装")
+
+        ttk.Button(
+            ffmpeg_btn_frame,
+            text="重新检测",
             bootstyle="secondary",
-            command=self._browse_input
-        )
-        browse_input_btn.pack(side=LEFT, padx=5)
-        ToolTip(browse_input_btn, text="选择要转码的视频文件")
-        
-        # 输出文件
-        output_frame = ttk.Labelframe(self.transcode_tab, text="输出文件", padding=10)
-        output_frame.pack(fill=X, pady=(0, 10))
-        
-        self.output_path_var = ttk.StringVar()
-        ttk.Entry(output_frame, textvariable=self.output_path_var, width=60).pack(side=LEFT, padx=5)
-        browse_output_btn = ttk.Button(
-            output_frame, 
-            text="📁 浏览...", 
-            bootstyle="secondary",
-            command=self._browse_output
-        )
-        browse_output_btn.pack(side=LEFT, padx=5)
-        ToolTip(browse_output_btn, text="选择输出文件位置")
-        
-        # 转码预设
-        preset_frame = ttk.Labelframe(self.transcode_tab, text="转码预设", padding=10)
-        preset_frame.pack(fill=X, pady=(0, 10))
-        
-        ttk.Label(preset_frame, text="选择预设:").pack(side=LEFT, padx=5)
-        
+            command=self._check_local_ffmpeg,
+        ).pack(side=LEFT, padx=(8, 0))
+
+        files_frame = ttk.Labelframe(self.left_frame, text="步骤 2: 添加文件", padding=10)
+        files_frame.pack(fill=X, pady=(0, 8))
+
+        ttk.Button(files_frame, text="添加文件", bootstyle="primary", command=self._add_files).pack(side=LEFT)
+        ttk.Button(files_frame, text="添加文件夹", bootstyle="info", command=self._add_folder).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(files_frame, text="清空列表", bootstyle="secondary", command=self._clear_files).pack(side=LEFT, padx=(8, 0))
+
+        cfg_frame = ttk.Labelframe(self.left_frame, text="步骤 3: 转码配置", padding=10)
+        cfg_frame.pack(fill=X, pady=(0, 8))
+
+        ttk.Label(cfg_frame, text="预设:").grid(row=0, column=0, sticky=W, pady=3)
         self.preset_var = ttk.StringVar()
-        preset_combo = ttk.Combobox(
-            preset_frame, 
-            textvariable=self.preset_var, 
-            values=list_presets(), 
-            state="readonly",
-            width=30
-        )
-        preset_combo.pack(side=LEFT, padx=5)
-        preset_combo.set(list_presets()[0] if list_presets() else "")
-        
-        # 执行节点
-        node_frame = ttk.Labelframe(self.transcode_tab, text="执行节点", padding=10)
-        node_frame.pack(fill=X, pady=(0, 10))
-        
-        ttk.Label(node_frame, text="选择节点:").pack(side=LEFT, padx=5)
-        
+        self.preset_combo = ttk.Combobox(cfg_frame, textvariable=self.preset_var, values=list_presets(), state="readonly", width=26)
+        self.preset_combo.grid(row=0, column=1, sticky=W, pady=3)
+        preset_names = list_presets()
+        if preset_names:
+            self.preset_combo.set(preset_names[0])
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_changed)
+
+        ttk.Label(cfg_frame, text="编码器:").grid(row=1, column=0, sticky=W, pady=3)
+        self.codec_var = ttk.StringVar(value="libx265")
+        self.codec_combo = ttk.Combobox(cfg_frame, textvariable=self.codec_var, values=CODEC_OPTIONS, state="readonly", width=26)
+        self.codec_combo.grid(row=1, column=1, sticky=W, pady=3)
+        self.codec_combo.bind("<<ComboboxSelected>>", self._on_codec_changed)
+
+        ttk.Label(cfg_frame, text="CRF/CQ:").grid(row=2, column=0, sticky=W, pady=3)
+        self.crf_var = ttk.StringVar(value="28")
+        ttk.Entry(cfg_frame, textvariable=self.crf_var, width=10).grid(row=2, column=1, sticky=W, pady=3)
+
+        ttk.Label(cfg_frame, text="最大宽:").grid(row=3, column=0, sticky=W, pady=3)
+        self.max_width_var = ttk.StringVar(value="")
+        ttk.Entry(cfg_frame, textvariable=self.max_width_var, width=10).grid(row=3, column=1, sticky=W, pady=3)
+
+        ttk.Label(cfg_frame, text="最大高:").grid(row=4, column=0, sticky=W, pady=3)
+        self.max_height_var = ttk.StringVar(value="")
+        ttk.Entry(cfg_frame, textvariable=self.max_height_var, width=10).grid(row=4, column=1, sticky=W, pady=3)
+
+        self.codec_support_var = ttk.StringVar(value="编码器支持: 等待节点信息")
+        ttk.Label(cfg_frame, textvariable=self.codec_support_var, bootstyle="info", wraplength=320).grid(row=5, column=0, columnspan=2, sticky=W, pady=(6, 0))
+
+        dispatch_frame = ttk.Labelframe(self.left_frame, text="步骤 4: 派发模式", padding=10)
+        dispatch_frame.pack(fill=X, pady=(0, 8))
+
+        self.dispatch_mode_var = ttk.StringVar(value="auto")
+        ttk.Radiobutton(dispatch_frame, text="自动派发到所有节点", variable=self.dispatch_mode_var, value="auto", command=self._on_dispatch_mode_changed).pack(anchor=W)
+
+        single_row = ttk.Frame(dispatch_frame)
+        single_row.pack(fill=X, pady=(6, 0))
+
+        ttk.Radiobutton(single_row, text="指定节点 IP", variable=self.dispatch_mode_var, value="single", command=self._on_dispatch_mode_changed).pack(side=LEFT)
+
         self.node_var = ttk.StringVar()
-        self.node_combo = ttk.Combobox(
-            node_frame, 
-            textvariable=self.node_var, 
-            state="readonly",
-            width=30
+        self.node_combo = ttk.Combobox(single_row, textvariable=self.node_var, state="readonly", width=18)
+        self.node_combo.pack(side=LEFT, padx=(8, 0))
+
+        ttk.Button(single_row, text="刷新", width=6, bootstyle="secondary", command=self._broadcast_discovery).pack(side=LEFT, padx=(6, 0))
+
+        run_frame = ttk.Labelframe(self.left_frame, text="步骤 5: 开始转码", padding=10)
+        run_frame.pack(fill=X)
+
+        self.start_auto_btn = ttk.Button(run_frame, text="开始转码（自动派发）", bootstyle="success", command=self._start_auto_transcode)
+        self.start_auto_btn.pack(fill=X)
+
+        self.start_single_btn = ttk.Button(run_frame, text="开始转码（指定节点）", bootstyle="primary", command=self._start_single_transcode)
+        self.start_single_btn.pack(fill=X, pady=(8, 0))
+
+        self._on_preset_changed()
+        self._on_dispatch_mode_changed()
+
+    def _create_right_file_panel(self):
+        files_frame = ttk.Labelframe(self.right_frame, text="文件列表与任务进度", padding=8)
+        files_frame.pack(fill=BOTH, expand=YES)
+
+        columns = ("file", "source", "status", "progress", "worker", "output")
+        self.files_tree = ttk.Treeview(files_frame, columns=columns, show="headings", bootstyle="primary")
+
+        self.files_tree.heading("file", text="文件")
+        self.files_tree.heading("source", text="源分辨率")
+        self.files_tree.heading("status", text="状态")
+        self.files_tree.heading("progress", text="进度")
+        self.files_tree.heading("worker", text="节点")
+        self.files_tree.heading("output", text="输出")
+
+        self.files_tree.column("file", width=240)
+        self.files_tree.column("source", width=100, anchor=CENTER)
+        self.files_tree.column("status", width=100, anchor=CENTER)
+        self.files_tree.column("progress", width=80, anchor=CENTER)
+        self.files_tree.column("worker", width=120, anchor=CENTER)
+        self.files_tree.column("output", width=260)
+
+        self.files_tree.pack(fill=BOTH, expand=YES)
+
+    def _create_bottom_status_panel(self):
+        total_frame = ttk.Labelframe(self.bottom_frame, text="总进度", padding=8)
+        total_frame.pack(fill=X)
+
+        self.overall_progress_var = ttk.IntVar(value=0)
+        self.overall_progress = ttk.Progressbar(total_frame, variable=self.overall_progress_var, maximum=100, bootstyle="success-striped")
+        self.overall_progress.pack(fill=X)
+
+        self.overall_label_var = ttk.StringVar(value="总进度: 0% (0/0)")
+        ttk.Label(total_frame, textvariable=self.overall_label_var).pack(anchor=W, pady=(4, 0))
+
+        nodes_frame = ttk.Labelframe(self.bottom_frame, text="节点状态", padding=8)
+        nodes_frame.pack(fill=X, pady=(8, 0))
+
+        node_columns = ("hostname", "ip", "status", "progress", "ffmpeg", "nvenc")
+        self.nodes_tree = ttk.Treeview(nodes_frame, columns=node_columns, show="headings", height=6)
+
+        self.nodes_tree.heading("hostname", text="主机名")
+        self.nodes_tree.heading("ip", text="IP")
+        self.nodes_tree.heading("status", text="状态")
+        self.nodes_tree.heading("progress", text="进度")
+        self.nodes_tree.heading("ffmpeg", text="FFmpeg")
+        self.nodes_tree.heading("nvenc", text="NVENC")
+
+        self.nodes_tree.column("hostname", width=130)
+        self.nodes_tree.column("ip", width=130)
+        self.nodes_tree.column("status", width=120, anchor=CENTER)
+        self.nodes_tree.column("progress", width=80, anchor=CENTER)
+        self.nodes_tree.column("ffmpeg", width=160)
+        self.nodes_tree.column("nvenc", width=80, anchor=CENTER)
+
+        self.nodes_tree.pack(fill=X)
+
+    def _on_node_discovered(self, node_info: Dict[str, Any]):
+        ip = node_info.get("ip")
+        if ip and ip not in self.node_capabilities and ip not in self._capabilities_fetching:
+            self._fetch_capabilities_async(ip)
+        self.root.after(0, self._refresh_nodes_tree)
+
+    def _broadcast_discovery(self):
+        self._last_discovery_time = time.time()
+        threading.Thread(target=self.discovery.broadcast_discovery, daemon=True).start()
+
+    def _schedule_refresh(self):
+        self._refresh_nodes_tree()
+        self._refresh_file_tree()
+        self._refresh_overall_progress()
+        self._update_codec_support_hint()
+
+        if time.time() - self._last_discovery_time > 8:
+            self._broadcast_discovery()
+
+        self.root.after(1000, self._schedule_refresh)
+
+    def _add_files(self):
+        paths = filedialog.askopenfilenames(
+            title="选择视频文件",
+            filetypes=[("视频文件", "*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.m4v *.ts *.webm"), ("所有文件", "*.*")],
         )
-        self.node_combo.pack(side=LEFT, padx=5)
-        
-        refresh_node_btn = ttk.Button(
-            node_frame, 
-            text="🔄", 
-            bootstyle="secondary", 
-            width=3,
-            command=self._refresh_node_combo
-        )
-        refresh_node_btn.pack(side=LEFT, padx=5)
-        ToolTip(refresh_node_btn, text="刷新节点列表")
-        
-        # 开始按钮
-        start_btn = ttk.Button(
-            self.transcode_tab, 
-            text="🚀 开始转码", 
-            bootstyle="primary",
-            width=20,
-            command=self._start_transcode
-        )
-        start_btn.pack(pady=20)
-        ToolTip(start_btn, text="点击开始转码任务")
-    
-    def _create_logs_tab(self):
-        """创建日志标签页"""
-        self.log_text = ScrolledText(self.logs_tab, wrap=WORD, autohide=True)
-        self.log_text.pack(fill=BOTH, expand=YES)
-        self.log_text.text.config(state=DISABLED)
-    
-    def _log(self, message: str):
-        """添加日志"""
-        self.log_text.text.config(state=NORMAL)
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(END, f"[{timestamp}] {message}\n")
-        self.log_text.see(END)
-        self.log_text.text.config(state=DISABLED)
-    
-    def _update_stats(self):
-        """更新状态栏统计"""
-        node_count = len(self.discovery.discovered_nodes)
-        task_count = len(self.controller.tasks)
-        completed_count = sum(1 for t in self.controller.tasks if t.status == "completed")
-        
-        self.stats_label.config(
-            text=f"节点: {node_count} | 任务: {task_count} | 完成: {completed_count}"
-        )
-    
-    def _on_node_discovered(self, node_info: dict):
-        """节点发现回调"""
-        self._log(f"发现节点: {node_info.get('hostname')} ({node_info.get('ip')})")
-        self._refresh_nodes()
-    
-    def _refresh_nodes(self):
-        """刷新节点列表"""
-        for item in self.nodes_tree.get_children():
-            self.nodes_tree.delete(item)
-        
-        for node_key, node_info in self.discovery.discovered_nodes.items():
-            # 格式化状态显示
-            status_raw = node_info.get("status", "unknown")
-            status_display = self._format_node_status(status_raw)
-            self.nodes_tree.insert("", END, values=(
-                node_info.get("hostname", ""),
-                node_info.get("ip", ""),
-                status_display,
-                node_info.get("last_seen", "")
-            ))
-        
-        self._refresh_node_combo()
-        self._update_stats()
-    
-    def _format_node_status(self, status) -> str:
-        """将节点状态转换为友好显示格式"""
-        # 如果 status 是字典，提取相关信息
-        if isinstance(status, dict):
-            node_status = status.get("status", "unknown")
-            progress = status.get("progress", 0)
-            if node_status == "processing":
-                return f"🔄 处理中 ({progress}%)"
-            elif node_status == "completed":
-                return "✅ 空闲"
-            elif node_status == "idle":
-                return "✅ 空闲"
-            elif node_status == "error":
-                return f"⚠️ 错误"
-            else:
-                return f"📊 {node_status}"
-        
-        # 如果是字符串
-        status_map = {
-            "idle": "✅ 空闲",
-            "processing": "🔄 处理中",
-            "completed": "✅ 空闲",
-            "error": "⚠️ 错误",
-            "unknown": "❓ 未知"
-        }
-        return status_map.get(status, str(status))
-    
-    def _refresh_tasks(self):
-        """刷新任务列表"""
-        for item in self.tasks_tree.get_children():
-            self.tasks_tree.delete(item)
-        
-        for task in self.controller.tasks:
-            # 状态显示友好格式
-            status_display = self._format_status(task.status)
-            self.tasks_tree.insert("", END, values=(
-                task.id,
-                os.path.basename(task.input_file),  # 只显示文件名
-                os.path.basename(task.output_file),
-                status_display,
-                task.worker or "",
-                f"{task.progress}%"
-            ), iid=task.id)  # 使用 task.id 作为 iid方便查找
-        
-        self._update_stats()
-    
-    def _format_status(self, status: str) -> str:
-        """将状态转换为友好显示格式"""
-        status_map = {
-            "pending": "⏳ 等待中",
-            "uploading": "📤 上传中",
-            "processing": "🔄 处理中",
-            "completed": "✅ 已完成",
-            "failed": "❌ 失败",
-            "error": "⚠️ 错误"
-        }
-        return status_map.get(status, status)
-    
-    def _on_task_select(self, event):
-        """任务选择事件处理"""
-        selection = self.tasks_tree.selection()
-        if not selection:
+        self._add_input_paths(list(paths))
+
+    def _add_folder(self):
+        folder = filedialog.askdirectory(title="选择包含视频的文件夹")
+        if not folder:
             return
-        
-        task_id = selection[0]
-        task = next((t for t in self.controller.tasks if t.id == task_id), None)
-        if not task:
+
+        paths = []
+        for root_dir, _, filenames in os.walk(folder):
+            for filename in filenames:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in VIDEO_EXTENSIONS:
+                    paths.append(os.path.join(root_dir, filename))
+
+        self._add_input_paths(paths)
+
+    def _add_input_paths(self, paths: List[str]):
+        added = 0
+        for path in paths:
+            abs_path = os.path.abspath(path)
+            if not os.path.isfile(abs_path):
+                continue
+            if abs_path in self.selected_files:
+                continue
+            self.selected_files.append(abs_path)
+            self.file_info_map[abs_path] = self._probe_resolution(abs_path)
+            added += 1
+
+        if added > 0:
+            self._refresh_file_tree()
+            self._refresh_overall_progress()
+
+    def _clear_files(self):
+        if self.running:
+            Messagebox.show_warning("任务执行中，暂不允许清空列表", "提示")
             return
-        
-        # 格式化显示任务详情
-        details = f"""任务 ID: {task.id}
-状态: {self._format_status(task.status)}
-进度: {task.progress}%
-输入文件: {task.input_file}
-输出文件: {task.output_file}
-执行节点: {task.worker or '未分配'}
-创建时间: {task.create_time}"""
-        
-        if task.error:
-            details += f"\n错误信息: {task.error}"
-        
-        self.task_details_text.text.config(state=NORMAL)
-        self.task_details_text.delete("1.0", END)
-        self.task_details_text.insert(END, details)
-        self.task_details_text.text.config(state=DISABLED)
-    
-    def _refresh_node_combo(self):
-        """刷新节点下拉框"""
-        nodes = [info.get("ip") for info in self.discovery.discovered_nodes.values()]
-        self.node_combo["values"] = nodes
-        if nodes and not self.node_var.get():
-            self.node_var.set(nodes[0])
-    
-    def _scan_nodes(self):
-        """扫描节点"""
-        self._log("正在扫描节点...")
-        threading.Thread(target=self._do_scan, daemon=True).start()
-    
-    def _do_scan(self):
-        """执行扫描"""
-        self.discovery.broadcast_discovery()
-        self.root.after(2000, self._refresh_nodes)
-    
-    def _browse_input(self):
-        """浏览输入文件"""
-        path = filedialog.askopenfilename(
-            title="选择输入文件",
-            filetypes=[
-                ("视频文件", "*.mp4 *.avi *.mkv *.mov *.flv *.wmv"),
-                ("所有文件", "*.*")
-            ]
-        )
-        if path:
-            self.input_path_var.set(path)
-            # 自动设置输出路径
-            if not self.output_path_var.get():
-                base, ext = os.path.splitext(path)
-                self.output_path_var.set(f"{base}_output{ext}")
-    
-    def _browse_output(self):
-        """浏览输出文件"""
-        path = filedialog.asksaveasfilename(
-            title="选择输出文件",
-            defaultextension=".mp4",
-            filetypes=[
-                ("MP4 文件", "*.mp4"),
-                ("MKV 文件", "*.mkv"),
-                ("所有文件", "*.*")
-            ]
-        )
-        if path:
-            self.output_path_var.set(path)
-    
-    def _start_transcode(self):
-        """开始转码"""
-        input_path = self.input_path_var.get()
-        output_path = self.output_path_var.get()
+        self.selected_files = []
+        self.file_info_map = {}
+        self.current_tasks = []
+        self._refresh_file_tree()
+        self._refresh_overall_progress()
+
+    def _probe_resolution(self, file_path: str) -> str:
+        try:
+            import ffmpeg
+
+            info = ffmpeg.probe(file_path)
+            for stream in info.get("streams", []):
+                if stream.get("codec_type") == "video":
+                    width = stream.get("width")
+                    height = stream.get("height")
+                    if width and height:
+                        return f"{width}x{height}"
+        except Exception:
+            pass
+        return "--"
+
+    def _on_preset_changed(self, _event=None):
         preset_name = self.preset_var.get()
-        worker_ip = self.node_var.get()
-        
-        if not input_path:
-            Messagebox.show_error("请选择输入文件", "错误")
+        if not preset_name:
             return
-        
-        if not output_path:
-            Messagebox.show_error("请选择输出文件", "错误")
-            return
-        
-        if not worker_ip:
-            Messagebox.show_error("请选择执行节点", "错误")
-            return
-        
-        # 获取预设参数
+
         try:
             preset = get_preset(preset_name)
-            ffmpeg_args = preset.to_ffmpeg_args()
         except KeyError:
-            ffmpeg_args = ["-c:v", "libx265", "-crf", "28"]
-        
-        # 创建任务
-        task = self.controller.create_task(input_path, output_path, ffmpeg_args)
-        
-        self._log(f"创建任务: {task.id}")
-        self._log(f"输入: {input_path}")
-        self._log(f"输出: {output_path}")
-        self._log(f"节点: {worker_ip}")
-        
-        # 提交任务
-        def submit_task():
+            return
+
+        if preset.codec and preset.codec != "none":
+            self.codec_var.set(preset.codec)
+
+        if preset.crf is not None:
+            self.crf_var.set(str(preset.crf))
+
+        if preset.resolution and ":" in preset.resolution:
+            width, height = preset.resolution.split(":", 1)
+            self.max_width_var.set(width)
+            self.max_height_var.set(height)
+
+        self._update_codec_support_hint()
+
+    def _on_codec_changed(self, _event=None):
+        self._update_codec_support_hint()
+
+    def _on_dispatch_mode_changed(self):
+        mode = self.dispatch_mode_var.get()
+        if mode == "single":
+            self.node_combo.config(state="readonly")
+        else:
+            self.node_combo.config(state="disabled")
+
+    def _build_scale_filter(self, max_width: Optional[int], max_height: Optional[int]) -> Optional[str]:
+        if max_width and max_height:
+            return f"scale=w=min(iw\\,{max_width}):h=min(ih\\,{max_height}):force_original_aspect_ratio=decrease"
+        if max_width:
+            return f"scale=w=min(iw\\,{max_width}):h=-2"
+        if max_height:
+            return f"scale=w=-2:h=min(ih\\,{max_height})"
+        return None
+
+    def _build_ffmpeg_args(self) -> List[str]:
+        preset_name = self.preset_var.get()
+        preset = get_preset(preset_name) if preset_name else None
+
+        codec = self.codec_var.get().strip() or (preset.codec if preset else "libx265")
+
+        crf_value = None
+        crf_text = self.crf_var.get().strip()
+        if crf_text:
+            crf_value = int(crf_text)
+        elif preset and preset.crf is not None:
+            crf_value = preset.crf
+
+        max_width = int(self.max_width_var.get()) if self.max_width_var.get().strip() else None
+        max_height = int(self.max_height_var.get()) if self.max_height_var.get().strip() else None
+        scale_filter = self._build_scale_filter(max_width, max_height)
+
+        args: List[str] = []
+        if codec and codec != "none":
+            args.extend(["-c:v", codec])
+
+        if scale_filter:
+            args.extend(["-vf", scale_filter])
+
+        if crf_value is not None and codec and codec != "none":
+            if "_nvenc" in codec:
+                args.extend(["-cq", str(crf_value)])
+            else:
+                args.extend(["-crf", str(crf_value)])
+        elif preset and preset.bitrate:
+            args.extend(["-b:v", preset.bitrate])
+
+        if preset and preset.preset:
+            args.extend(["-preset", preset.preset])
+
+        if preset and preset.audio_codec:
+            args.extend(["-c:a", preset.audio_codec])
+
+        if preset and preset.audio_bitrate:
+            args.extend(["-b:a", preset.audio_bitrate])
+
+        return args
+
+    def _worker_supports_codec(self, worker_ip: str, codec: str) -> bool:
+        capabilities = self.node_capabilities.get(worker_ip)
+        if not capabilities:
+            return True
+        encoders = capabilities.get("encoders") or []
+        return codec in encoders
+
+    def _update_codec_support_hint(self):
+        codec = self.codec_var.get().strip()
+        workers = self._get_discovered_worker_ips()
+        if not workers:
+            self.codec_support_var.set("编码器支持: 暂无节点在线")
+            return
+
+        support_count = sum(1 for ip in workers if self._worker_supports_codec(ip, codec))
+        if "_nvenc" in codec:
+            self.codec_support_var.set(f"编码器支持: {codec}，支持节点 {support_count}/{len(workers)}")
+        else:
+            self.codec_support_var.set(f"编码器支持: {codec}，检测支持节点 {support_count}/{len(workers)}")
+
+    def _start_auto_transcode(self):
+        self.dispatch_mode_var.set("auto")
+        self._on_dispatch_mode_changed()
+        self._start_transcode(mode="auto")
+
+    def _start_single_transcode(self):
+        self.dispatch_mode_var.set("single")
+        self._on_dispatch_mode_changed()
+        self._start_transcode(mode="single")
+
+    def _start_transcode(self, mode: str):
+        if self.running:
+            Messagebox.show_warning("已有任务正在执行", "提示")
+            return
+
+        if not self.selected_files:
+            Messagebox.show_error("请先添加文件或文件夹", "错误")
+            return
+
+        try:
+            ffmpeg_args = self._build_ffmpeg_args()
+        except ValueError:
+            Messagebox.show_error("CRF、最大宽/高必须是数字", "错误")
+            return
+        except KeyError as error:
+            Messagebox.show_error(str(error), "错误")
+            return
+
+        codec = self.codec_var.get().strip()
+        workers = self._get_discovered_worker_ips()
+        if not workers:
+            Messagebox.show_error("未发现可用节点，请先刷新节点", "错误")
+            return
+
+        if mode == "single":
+            selected_worker = self.node_var.get().strip()
+            if not selected_worker:
+                Messagebox.show_error("请选择目标节点 IP", "错误")
+                return
+            workers = [selected_worker]
+
+        supported_workers = [ip for ip in workers if self._worker_supports_codec(ip, codec)]
+        if not supported_workers:
+            Messagebox.show_error(f"没有节点支持编码器 {codec}", "错误")
+            return
+
+        if mode == "auto" and len(supported_workers) < len(workers):
+            Messagebox.show_info(f"部分节点不支持 {codec}，将自动使用支持的节点执行", "提示")
+
+        tasks = self.controller.create_tasks_for_files(
+            self.selected_files,
+            ffmpeg_args,
+            max_attempts=2,
+        )
+        self.current_tasks = tasks
+
+        self.running = True
+        self.dispatch_stop_event.clear()
+        self.start_auto_btn.config(state=DISABLED)
+        self.start_single_btn.config(state=DISABLED)
+
+        self._refresh_file_tree()
+        self._refresh_overall_progress()
+
+        def on_task_update(task: Task):
+            self.root.after(0, self._on_task_runtime_update, task)
+
+        def on_node_update(worker_ip: str, status: Dict[str, Any]):
+            self.root.after(0, self._on_node_runtime_update, worker_ip, status)
+
+        def dispatch_runner():
             try:
-                # 启动一个线程定期更新进度
-                stop_progress_update = threading.Event()
-                last_worker_status = [None]  # 用于跟踪上一次的 Worker 状态
-                
-                def update_progress():
-                    """定期从 Worker 获取进度并更新任务"""
-                    while not stop_progress_update.is_set():
-                        try:
-                            status = self.controller.get_worker_status(worker_ip)
-                            current_status = status.get("status")
-                            
-                            # 状态变化时更新
-                            if current_status == "processing":
-                                progress = status.get("progress", 0)
-                                task.progress = progress
-                                task.status = "processing"
-                                self.root.after(0, self._refresh_tasks)
-                                last_worker_status[0] = "processing"
-                            elif current_status == "completed":
-                                # 只有之前是 processing 才认为任务完成
-                                if last_worker_status[0] == "processing":
-                                    task.progress = 100
-                                    task.status = "completed"
-                                    self.root.after(0, self._refresh_tasks)
-                                    break
-                            elif current_status == "idle":
-                                # Worker 空闲，说明还没开始或已完成
-                                if last_worker_status[0] == "processing":
-                                    # 从 processing 变为 idle，说明完成了
-                                    task.progress = 100
-                                    task.status = "completed"
-                                    self.root.after(0, self._refresh_tasks)
-                                    break
-                        except Exception:
-                            pass
-                        stop_progress_update.wait(0.5)  # 每0.5秒更新一次
-                
-                progress_thread = threading.Thread(target=update_progress, daemon=True)
-                progress_thread.start()
-                
-                result = self.controller.submit_task(task, worker_ip)
-                stop_progress_update.set()  # 停止进度更新线程
-                
-                if result.get("status") == "success":
-                    task.status = "completed"
-                    task.progress = 100
-                    self._log(f"任务 {task.id} 完成")
-                    # 下载结果
-                    output_file = result.get("output_file")
-                    if output_file:
-                        self.controller.download_result(
-                            worker_ip,
-                            os.path.basename(output_file),
-                            output_path
-                        )
-                    self.root.after(0, lambda: Messagebox.show_info(
-                        f"转码完成: {output_path}", "成功"
-                    ))
-                else:
-                    task.status = "failed"
-                    self._log(f"任务 {task.id} 失败: {result.get('error')}")
-                    self.root.after(0, lambda: Messagebox.show_error(
-                        f"转码失败: {result.get('error')}", "失败"
-                    ))
-            except Exception as e:
-                task.status = "error"
-                task.error = str(e)
-                self._log(f"任务异常: {e}")
-                self.root.after(0, lambda: Messagebox.show_error(str(e), "错误"))
-            
-            self.root.after(0, self._refresh_tasks)
-        
-        threading.Thread(target=submit_task, daemon=True).start()
-        self._refresh_tasks()
-    
-    def _schedule_refresh(self):
-        """定时刷新"""
-        self._refresh_nodes()
-        self._refresh_tasks()
-        self.root.after(5000, self._schedule_refresh)
-    
+                result = self.controller.dispatch_tasks(
+                    tasks,
+                    supported_workers,
+                    on_task_update=on_task_update,
+                    on_node_update=on_node_update,
+                    stop_event=self.dispatch_stop_event,
+                )
+                self.root.after(0, self._on_dispatch_finished, result)
+            except Exception as error:
+                logger.exception("批量派发失败")
+                self.root.after(0, self._on_dispatch_error, str(error))
+
+        self.dispatch_thread = threading.Thread(target=dispatch_runner, daemon=True)
+        self.dispatch_thread.start()
+
+    def _on_task_runtime_update(self, _task: Task):
+        self._refresh_file_tree()
+        self._refresh_overall_progress()
+
+    def _on_node_runtime_update(self, worker_ip: str, status: Dict[str, Any]):
+        self.node_runtime_status[worker_ip] = status
+        self._refresh_nodes_tree()
+
+    def _on_dispatch_finished(self, result: Dict[str, Any]):
+        self.running = False
+        self.start_auto_btn.config(state=NORMAL)
+        self.start_single_btn.config(state=NORMAL)
+        self._refresh_file_tree()
+        self._refresh_overall_progress()
+
+        total = result.get("total", 0)
+        completed = result.get("completed", 0)
+        failed = result.get("failed", 0)
+        Messagebox.show_info(f"批量转码完成\n总计: {total}\n成功: {completed}\n失败: {failed}", "完成")
+
+    def _on_dispatch_error(self, error_message: str):
+        self.running = False
+        self.start_auto_btn.config(state=NORMAL)
+        self.start_single_btn.config(state=NORMAL)
+        Messagebox.show_error(f"任务执行异常: {error_message}", "错误")
+
+    def _get_discovered_worker_ips(self) -> List[str]:
+        ips = [info.get("ip") for info in self.discovery.discovered_nodes.values() if info.get("ip")]
+        seen = set()
+        result = []
+        for ip in ips:
+            if ip not in seen:
+                seen.add(ip)
+                result.append(ip)
+        return result
+
+    def _get_task_by_input(self, input_file: str) -> Optional[Task]:
+        for task in self.current_tasks:
+            if task.input_file == input_file:
+                return task
+        return None
+
+    def _format_task_status(self, status: str) -> str:
+        mapping = {
+            "pending": "等待中",
+            "uploading": "上传中",
+            "processing": "处理中",
+            "completed": "已完成",
+            "failed": "失败",
+            "error": "错误",
+        }
+        return mapping.get(status, status)
+
+    def _refresh_file_tree(self):
+        for item in self.files_tree.get_children():
+            self.files_tree.delete(item)
+
+        for file_path in self.selected_files:
+            task = self._get_task_by_input(file_path)
+            file_name = os.path.basename(file_path)
+            source_resolution = self.file_info_map.get(file_path, "--")
+
+            if task:
+                status_text = self._format_task_status(task.status)
+                progress_text = f"{int(task.progress)}%"
+                worker_text = task.worker or ""
+                output_text = os.path.basename(task.output_file)
+            else:
+                status_text = "待开始"
+                progress_text = "0%"
+                worker_text = ""
+                output_text = os.path.basename(self.controller.build_output_path(file_path))
+
+            self.files_tree.insert(
+                "",
+                END,
+                values=(file_name, source_resolution, status_text, progress_text, worker_text, output_text),
+            )
+
+    def _format_node_status(self, status: Any) -> str:
+        if isinstance(status, dict):
+            state = status.get("status", "unknown")
+            progress = int(status.get("progress", 0))
+            if state == "processing":
+                return f"处理中({progress}%)"
+            if state in ("idle", "completed"):
+                return "空闲"
+            if state == "error":
+                return "错误"
+            return str(state)
+
+        state = str(status)
+        mapping = {
+            "processing": "处理中",
+            "idle": "空闲",
+            "completed": "空闲",
+            "error": "错误",
+            "unknown": "未知",
+        }
+        return mapping.get(state, state)
+
+    def _refresh_nodes_tree(self):
+        for item in self.nodes_tree.get_children():
+            self.nodes_tree.delete(item)
+
+        workers = self._get_discovered_worker_ips()
+        self.node_combo["values"] = workers
+        if workers and self.node_var.get() not in workers:
+            self.node_var.set(workers[0])
+
+        for node_info in self.discovery.discovered_nodes.values():
+            ip = node_info.get("ip", "")
+            runtime_status = self.node_runtime_status.get(ip)
+            status_source = runtime_status if runtime_status else node_info.get("status", "unknown")
+
+            progress = "--"
+            if isinstance(status_source, dict):
+                progress = f"{int(status_source.get('progress', 0))}%"
+
+            capabilities = self.node_capabilities.get(ip, {})
+            ffmpeg_version = capabilities.get("ffmpeg_version") or "--"
+            if ffmpeg_version and ffmpeg_version != "--":
+                ffmpeg_version = str(ffmpeg_version)[:24]
+            nvenc_text = "支持" if capabilities.get("nvenc_supported") else "不支持"
+            if not capabilities:
+                nvenc_text = "--"
+
+            self.nodes_tree.insert(
+                "",
+                END,
+                values=(
+                    node_info.get("hostname", ""),
+                    ip,
+                    self._format_node_status(status_source),
+                    progress,
+                    ffmpeg_version,
+                    nvenc_text,
+                ),
+            )
+
+            if ip and ip not in self.node_capabilities and ip not in self._capabilities_fetching:
+                self._fetch_capabilities_async(ip)
+
+    def _refresh_overall_progress(self):
+        total = len(self.selected_files)
+        if total == 0:
+            self.overall_progress_var.set(0)
+            self.overall_label_var.set("总进度: 0% (0/0)")
+            return
+
+        if not self.current_tasks:
+            self.overall_progress_var.set(0)
+            self.overall_label_var.set(f"总进度: 0% (0/{total})")
+            return
+
+        progress_sum = sum(int(task.progress) for task in self.current_tasks)
+        overall_percent = int(progress_sum / total)
+        completed = sum(1 for task in self.current_tasks if task.status == "completed")
+
+        self.overall_progress_var.set(overall_percent)
+        self.overall_label_var.set(f"总进度: {overall_percent}% ({completed}/{total})")
+
+    def _fetch_capabilities_async(self, worker_ip: str):
+        self._capabilities_fetching.add(worker_ip)
+
+        def runner():
+            try:
+                capabilities = self.controller.get_worker_capabilities(worker_ip)
+                self.node_capabilities[worker_ip] = capabilities
+            finally:
+                self._capabilities_fetching.discard(worker_ip)
+                self.root.after(0, self._update_codec_support_hint)
+                self.root.after(0, self._refresh_nodes_tree)
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _check_local_ffmpeg(self):
+        try:
+            result = subprocess.run(
+                [config.ffmpeg_path, "-version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                first_line = result.stdout.splitlines()[0] if result.stdout else ""
+                version = first_line.replace("ffmpeg version", "").strip()
+                self.ffmpeg_version_var.set(f"FFmpeg: {version}")
+                self.install_ffmpeg_btn.config(bootstyle="secondary")
+                return
+        except Exception:
+            pass
+
+        self.ffmpeg_version_var.set("FFmpeg: 未安装")
+        self.install_ffmpeg_btn.config(bootstyle="warning")
+
+    def _install_ffmpeg(self):
+        self.install_ffmpeg_btn.config(state=DISABLED)
+
+        def runner():
+            try:
+                self._install_ffmpeg_windows()
+                self.root.after(0, lambda: Messagebox.show_info("FFmpeg 安装完成", "成功"))
+            except Exception as error:
+                logger.exception("安装 FFmpeg 失败")
+                self.root.after(
+                    0,
+                    lambda: Messagebox.show_error(
+                        f"自动安装失败: {error}\n请手动选择本地 ffmpeg.exe。",
+                        "安装失败",
+                    ),
+                )
+            finally:
+                self.root.after(0, self._check_local_ffmpeg)
+                self.root.after(0, lambda: self.install_ffmpeg_btn.config(state=NORMAL))
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _install_ffmpeg_windows(self):
+        download_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = os.path.join(temp_dir, "ffmpeg.zip")
+            extract_dir = os.path.join(temp_dir, "extract")
+
+            response = requests.get(download_url, stream=True, timeout=90)
+            response.raise_for_status()
+            with open(zip_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        file.write(chunk)
+
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+
+            ffmpeg_exe = None
+            ffprobe_exe = None
+            for root_dir, _, files in os.walk(extract_dir):
+                if "ffmpeg.exe" in files:
+                    ffmpeg_exe = os.path.join(root_dir, "ffmpeg.exe")
+                if "ffprobe.exe" in files:
+                    ffprobe_exe = os.path.join(root_dir, "ffprobe.exe")
+
+            if not ffmpeg_exe:
+                raise RuntimeError("安装包中未找到 ffmpeg.exe")
+
+            install_bin = os.path.join(os.getcwd(), "tools", "ffmpeg", "bin")
+            os.makedirs(install_bin, exist_ok=True)
+
+            target_ffmpeg = os.path.join(install_bin, "ffmpeg.exe")
+            shutil.copy2(ffmpeg_exe, target_ffmpeg)
+
+            if ffprobe_exe:
+                target_ffprobe = os.path.join(install_bin, "ffprobe.exe")
+                shutil.copy2(ffprobe_exe, target_ffprobe)
+
+            config.ffmpeg_path = target_ffmpeg
+            self._save_user_config()
+
+    def _load_user_config(self):
+        if not os.path.exists(self.user_config_path):
+            return
+        try:
+            with open(self.user_config_path, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            ffmpeg_path = data.get("ffmpeg_path")
+            if ffmpeg_path:
+                config.ffmpeg_path = ffmpeg_path
+        except Exception as error:
+            logger.warning(f"读取 GUI 配置失败: {error}")
+
+    def _save_user_config(self):
+        try:
+            with open(self.user_config_path, "w", encoding="utf-8") as file:
+                json.dump({"ffmpeg_path": config.ffmpeg_path}, file, ensure_ascii=False, indent=2)
+        except Exception as error:
+            logger.warning(f"保存 GUI 配置失败: {error}")
+
     def run(self):
-        """运行应用"""
         self.root.mainloop()
-    
+
     def close(self):
-        """关闭应用"""
+        self.dispatch_stop_event.set()
         self.discovery.stop()
 
 
 def main():
-    """GUI 控制端入口"""
     root = ttk.Window(
         title="Transcoder Cluster - 控制端",
         themename="cosmo",
-        size=(1255, 875)
+        size=(1450, 920),
     )
     app = ControllerApp(root)
-    
+
     def on_close():
         app.close()
         root.destroy()
-    
+
     root.protocol("WM_DELETE_WINDOW", on_close)
     app.run()
 
