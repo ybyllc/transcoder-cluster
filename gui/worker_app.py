@@ -15,6 +15,7 @@ from ttkbootstrap.widgets import ToolTip
 from ttkbootstrap.widgets.scrolled import ScrolledText
 from datetime import datetime
 
+from transcoder_cluster import __version__
 from transcoder_cluster.core.worker import Worker, WorkerHandler
 from transcoder_cluster.core.discovery import HeartbeatService, DiscoveryResponder
 from transcoder_cluster.utils.config import config
@@ -341,8 +342,9 @@ class WorkerApp:
 
 def main():
     """GUI Worker 入口"""
+    version_tag = __version__ if str(__version__).startswith("v") else f"v{__version__}"
     root = ttk.Window(
-        title="Transcoder Cluster - Worker 节点",
+        title=f"Transcoder Cluster {version_tag} - 子节点",
         themename="cosmo",
         #size=(600, 550)
     )

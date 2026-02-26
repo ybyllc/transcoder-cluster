@@ -197,7 +197,7 @@ class Controller:
         logger.info(f"创建任务: {task.id}")
         return task
 
-    def build_output_path(self, input_file: str, suffix: str = "_output") -> str:
+    def build_output_path(self, input_file: str, suffix: str = "_transcoded") -> str:
         """
         根据输入文件路径生成输出路径（同目录 + 后缀，自动避重名）。
         """
@@ -215,11 +215,12 @@ class Controller:
         input_files: List[str],
         ffmpeg_args: List[str],
         max_attempts: int = 1,
+        output_suffix: str = "_transcoded",
     ) -> List[Task]:
         """按文件列表批量创建任务。"""
         tasks = []
         for input_file in input_files:
-            output_file = self.build_output_path(input_file)
+            output_file = self.build_output_path(input_file, suffix=output_suffix)
             tasks.append(self.create_task(input_file, output_file, ffmpeg_args, max_attempts=max_attempts))
         return tasks
 
@@ -457,7 +458,12 @@ class Controller:
                 if on_node_update:
                     on_node_update(worker_ip, status)
                 current_status = status.get("status")
-                if current_status == "processing":
+                if current_status in ("receiving", "uploading"):
+                    task.status = "uploading"
+                    task.progress = int(status.get("progress", 0))
+                    if on_task_update:
+                        on_task_update(task)
+                elif current_status == "processing":
                     task.status = "processing"
                     task.progress = int(status.get("progress", 0))
                     if on_task_update:
@@ -473,16 +479,37 @@ class Controller:
                 return False, result.get("error", "Worker failed")
 
             output_file = result.get("output_file")
-            if output_file:
-                ok = self.download_result(worker_ip, os.path.basename(output_file), task.output_file)
-                if not ok:
-                    return False, "下载转码结果失败"
+            if not output_file:
+                return False, "Worker 未返回输出文件路径"
+
+            ok = self.download_result(worker_ip, os.path.basename(output_file), task.output_file)
+            if not ok:
+                return False, "下载转码结果失败"
+
+            valid, error_message = self._validate_output_file(task.output_file)
+            if not valid:
+                return False, error_message
             return True, None
         except Exception as e:
             return False, str(e)
         finally:
             poll_stop.set()
             poll_thread.join(timeout=1)
+
+    def _validate_output_file(self, output_path: str) -> Tuple[bool, str]:
+        """校验输出文件存在且大小有效。"""
+        if not os.path.exists(output_path):
+            return False, "输出文件不存在"
+
+        try:
+            file_size = os.path.getsize(output_path)
+        except OSError as error:
+            return False, f"读取输出文件失败: {error}"
+
+        if file_size <= 0:
+            return False, "输出文件大小为 0"
+
+        return True, ""
 
 
 def main():

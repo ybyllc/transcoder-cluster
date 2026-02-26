@@ -93,6 +93,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     
     steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
     - name: Download Worker EXE
       uses: actions/download-artifact@v4
       with:
@@ -104,6 +109,51 @@ jobs:
       with:
         name: tc-control-gui
         path: artifacts/
+
+    - name: Prepare Release Notes
+      shell: bash
+      run: |
+        set -euo pipefail
+        TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+        NOTES_FILE=".github/release-notes/${TAG}.md"
+
+        if [[ -f "$NOTES_FILE" ]]; then
+          cp "$NOTES_FILE" release_body.md
+          exit 0
+        fi
+
+        PREV_TAG="$(git tag --sort=-v:refname | grep -Fxv "$TAG" | head -n 1 || true)"
+        {
+          echo "## 📥 下载"
+          echo
+          echo "| 文件 | 说明 |"
+          echo "|------|------|"
+          echo "| \`tc-worker-gui.exe\` | Worker 节点程序 |"
+          echo "| \`tc-control-gui.exe\` | 主控端程序 |"
+          echo
+          echo "## 🚀 使用方法"
+          echo
+          echo "1. 下载 EXE 文件"
+          echo "2. 双击运行即可（无需安装）"
+          echo
+          echo "## ⚠️ 注意事项"
+          echo
+          echo "- **需要安装 FFmpeg** 并添加到系统 PATH 才能进行视频转码"
+          echo "- 首次运行可能需要允许防火墙通过"
+          echo
+          echo "## 📝 更新日志（详细）"
+          echo
+          if [[ -n "$PREV_TAG" ]]; then
+            echo "对比范围: \`${PREV_TAG}...${TAG}\`"
+            echo
+            git log --no-merges --pretty=format:'- `%h` %s' "${PREV_TAG}..${TAG}"
+          else
+            echo "提交列表:"
+            echo
+            git log --no-merges --pretty=format:'- `%h` %s' "${TAG}"
+          fi
+          echo
+        } > release_body.md
     
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -113,29 +163,7 @@ jobs:
         files: |
           artifacts/tc-worker-gui.exe
           artifacts/tc-control-gui.exe
-        body: |
-          # Transcoder Cluster ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-          
-          ##📥 下载
-          
-          | 文件 | 说明 |
-          |------|------|
-          | `tc-worker-gui.exe` | Worker 节点程序 |
-          | `tc-control-gui.exe` | 控制端程序 |
-          
-          ## 🚀 使用方法
-          
-          1. 下载 EXE 文件
-          2. 双击运行即可（无需安装）
-          
-          ## ⚠️ 注意事项
-          
-          - **需要安装 FFmpeg** 并添加到系统 PATH 才能进行视频转码
-          - 首次运行可能需要允许防火墙通过
-          
-          ## 📝 更新日志
-          
-          参见 [README.md](https://github.com/ybyllc/transcoder-cluster#-更新日志)
+        body_path: release_body.md
         draft: false
         prerelease: false
       env:

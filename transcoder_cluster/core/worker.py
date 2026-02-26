@@ -11,7 +11,7 @@ import re
 import subprocess
 import threading
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -19,6 +19,13 @@ from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class WorkerHTTPServer(ThreadingHTTPServer):
+    """支持并发请求的 Worker HTTP 服务。"""
+
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 def parse_ffmpeg_progress(line: str) -> Optional[float]:
@@ -389,7 +396,7 @@ class Worker:
         """
         self.port = port
         self.work_dir = work_dir or config.work_dir
-        self.server: Optional[HTTPServer] = None
+        self.server: Optional[WorkerHTTPServer] = None
         self._server_thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -398,7 +405,7 @@ class Worker:
 
     def start(self) -> None:
         """启动 Worker 服务器（阻塞直到收到 KeyboardInterrupt 或 stop() 被调用）"""
-        self.server = HTTPServer(("0.0.0.0", self.port), WorkerHandler)
+        self.server = WorkerHTTPServer(("0.0.0.0", self.port), WorkerHandler)
         self._running = True
 
         logger.info(f"Worker 启动于 http://0.0.0.0:{self.port}")
@@ -413,7 +420,7 @@ class Worker:
 
     def start_async(self) -> None:
         """异步启动 Worker 服务器（在后台线程中运行，立即返回）"""
-        self.server = HTTPServer(("0.0.0.0", self.port), WorkerHandler)
+        self.server = WorkerHTTPServer(("0.0.0.0", self.port), WorkerHandler)
         self._running = True
 
         logger.info(f"Worker 启动于 http://0.0.0.0:{self.port}")

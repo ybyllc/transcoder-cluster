@@ -18,7 +18,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/ybyllc/transcoder-cluster)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/psf/black)
 
-[🚀 快速开始](#-快速开始) • [📖 文档](#-目录) • [🤝 贡献](#-贡献指南) • [💬 讨论](https://github.com/ybyllc/transcoder-cluster/discussions)
+[🚀 快速开始](#-快速开始) • [📖 文档](#-目录) • [🧭 通信流程](transcoder_cluster/core/COMMUNICATION_FLOW.md) • [🤝 贡献](#-贡献指南) • [💬 讨论](https://github.com/ybyllc/transcoder-cluster/discussions)
 
 </div>
 
@@ -42,6 +42,7 @@
 
 - [功能特性](#-功能特性)
 - [系统架构](#️-系统架构)
+- [通信流程笔记（Core）](transcoder_cluster/core/COMMUNICATION_FLOW.md)
 - [环境要求](#-环境要求)
 - [安装](#-安装)
 - [快速开始](#-快速开始)
@@ -405,6 +406,8 @@ transcoder-cluster/
 
 ## 🔨 开发指南
 
+核心通信链路说明见: [`transcoder_cluster/core/COMMUNICATION_FLOW.md`](transcoder_cluster/core/COMMUNICATION_FLOW.md)
+
 ### 设置开发环境
 
 ```bash
@@ -519,11 +522,33 @@ PRESETS["my_custom_preset"] = TranscodePreset(
 
 ## 📝 更新日志
 
-### v0.2.0 (当前版本)
+### v0.2.1 (当前版本)
+
+#### 🚀 新增改进
+- 主控端流程化单页继续优化，配置与任务操作更直观
+- 新增任务列表右键操作，支持空白区操作和选中任务删除
+- 输出文件后缀支持可视化配置，默认 `_transcoded`
+- CRF/CQ 支持输入 `0` 表示自动（不追加 `-crf/-cq` 参数）
+- 左侧流程栏拖拽与宽度约束优化（含最大宽度限制）
+- 新增通信流程文档：`transcoder_cluster/core/COMMUNICATION_FLOW.md`
+- 发布流程支持版本专属 Release 文案
+
+#### 🐛 修复问题
+- 修复主控端任务列表“上传中 0%”不更新的问题
+- 修复节点状态偶发 `unknown` 覆盖“处理中”的问题
+- Worker 升级为并发 HTTP 服务，任务执行期间状态接口可实时访问
+- 修复转码结果校验稳定性，减少无效输出误判成功
+- 修复并恢复“成功后删除原文件”流程
+- 修复 CLI/GUI 启动告警及相关兼容性问题
+- 修复发布流水线问题，支持标签补发发布
+
+### v0.2.0
 - ✅ 主控端 GUI 重构为单页流程工作台，操作更直观
 - ✅ 支持自动派发到所有节点（节点空闲自动领取新任务）
 - ✅ 新增编码器能力检测（重点检测 NVENC 并提示支持情况）
+- ✅ 输出文件默认后缀统一为 `_transcoded`（支持在 GUI 中修改）
 - ✅ 新增“成功后删除原文件”可选项（仅删除成功任务的源文件）
+- ✅ 转码完成前增加输出文件有效性校验（文件存在且大小大于 0）
 - ✅ 优化 Worker 停止逻辑与发现服务关闭稳定性，降低卡死风险
 - ✅ CLI/GUI 增加版本与 FFmpeg 检测信息展示
 - ✅ 修复 Release 打包工作流，可手动补发指定标签发布
