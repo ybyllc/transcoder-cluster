@@ -527,9 +527,11 @@ PRESETS["my_custom_preset"] = TranscodePreset(
 - ✅ 优化 Worker 停止逻辑与发现服务关闭稳定性，降低卡死风险
 - ✅ CLI/GUI 增加版本与 FFmpeg 检测信息展示
 - ✅ 修复 Release 打包工作流，可手动补发指定标签发布
-v0.2.0界面的样式：
-<img width="1700" height="1302" alt="image" src="https://github.com/user-attachments/assets/ecc8c8eb-f431-4933-8b23-687f0d002266" />
-<img width="1030" height="961" alt="image" src="https://github.com/user-attachments/assets/009a230b-95b8-4a84-b5d1-3d93f1ffda0e" />
+#### v0.2.0界面样式：
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/ecc8c8eb-f431-4933-8b23-687f0d002266" height="406" />
+  <img src="https://github.com/user-attachments/assets/009a230b-95b8-4a84-b5d1-3d93f1ffda0e" height="300" />
+</p>
 
 ### v0.1.0
 - ✅ 初版分布式转码框架
