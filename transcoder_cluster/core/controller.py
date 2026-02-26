@@ -215,11 +215,12 @@ class Controller:
         input_files: List[str],
         ffmpeg_args: List[str],
         max_attempts: int = 1,
+        output_suffix: str = "_output",
     ) -> List[Task]:
         """按文件列表批量创建任务。"""
         tasks = []
         for input_file in input_files:
-            output_file = self.build_output_path(input_file)
+            output_file = self.build_output_path(input_file, suffix=output_suffix)
             tasks.append(self.create_task(input_file, output_file, ffmpeg_args, max_attempts=max_attempts))
         return tasks
 

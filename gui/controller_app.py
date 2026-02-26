@@ -133,6 +133,13 @@ class ControllerApp:
         ttk.Button(files_frame, text="添加文件夹", bootstyle="info", command=self._add_folder, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
         ttk.Button(files_frame, text="清空列表", bootstyle="secondary", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
 
+        suffix_row = ttk.Frame(files_frame)
+        suffix_row.pack(fill=X, pady=(8, 0))
+        ttk.Label(suffix_row, text="输出后缀").pack(side=LEFT)
+        self.output_suffix_var = ttk.StringVar(value="_output")
+        ttk.Entry(suffix_row, textvariable=self.output_suffix_var, width=18).pack(side=LEFT, padx=(8, 0))
+        ttk.Label(suffix_row, text="默认: _output", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
+
         cfg_frame = ttk.Labelframe(self.left_frame, text="转码配置", padding=10)
         cfg_frame.pack(fill=X, pady=(0, 8))
 
@@ -238,6 +245,24 @@ class ControllerApp:
 
         self.files_tree.pack(fill=BOTH, expand=YES)
 
+        list_actions = ttk.Frame(files_frame)
+        list_actions.pack(fill=X, pady=(8, 0))
+        ttk.Button(
+            list_actions,
+            text="清空列表",
+            bootstyle="secondary",
+            command=self._clear_files,
+            padding=BTN_PADDING,
+        ).pack(side=RIGHT)
+
+        self.files_context_menu = tk.Menu(self.root, tearoff=0)
+        self.files_context_menu.add_command(label="添加文件", command=self._add_files)
+        self.files_context_menu.add_command(label="添加文件夹", command=self._add_folder)
+        self.files_context_menu.add_separator()
+        self.files_context_menu.add_command(label="清空列表", command=self._clear_files)
+        self.files_tree.bind("<Button-3>", self._show_files_context_menu, add="+")
+        self.files_tree.bind("<Button-2>", self._show_files_context_menu, add="+")
+
     def _create_bottom_status_panel(self):
         total_frame = ttk.Labelframe(self.bottom_frame, text="总进度", padding=8)
         total_frame.pack(fill=X)
@@ -251,6 +276,16 @@ class ControllerApp:
 
         nodes_frame = ttk.Labelframe(self.bottom_frame, text="节点状态", padding=8)
         nodes_frame.pack(fill=X, pady=(8, 0))
+
+        nodes_header = ttk.Frame(nodes_frame)
+        nodes_header.pack(fill=X, pady=(0, 6))
+        ttk.Button(
+            nodes_header,
+            text="刷新节点",
+            bootstyle="secondary",
+            command=self._refresh_nodes_now,
+            padding=BTN_PADDING,
+        ).pack(side=RIGHT)
 
         node_columns = ("hostname", "ip", "status", "progress", "ffmpeg", "nvenc")
         self.nodes_tree = ttk.Treeview(nodes_frame, columns=node_columns, show="headings", height=6)
@@ -305,6 +340,18 @@ class ControllerApp:
     def _broadcast_discovery(self):
         self._last_discovery_time = time.time()
         threading.Thread(target=self.discovery.broadcast_discovery, daemon=True).start()
+
+    def _refresh_nodes_now(self):
+        self._broadcast_discovery()
+        self._refresh_nodes_tree()
+        self._update_codec_support_hint()
+
+    def _show_files_context_menu(self, event):
+        try:
+            self.files_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.files_context_menu.grab_release()
+        return "break"
 
     def _schedule_refresh(self):
         self._refresh_nodes_tree()
@@ -411,6 +458,13 @@ class ControllerApp:
             self.node_combo.config(state="readonly")
         else:
             self.node_combo.config(state="disabled")
+
+    def _get_output_suffix(self) -> str:
+        suffix = self.output_suffix_var.get().strip()
+        if not suffix:
+            suffix = "_output"
+            self.output_suffix_var.set(suffix)
+        return suffix
 
     def _build_scale_filter(self, max_width: Optional[int], max_height: Optional[int]) -> Optional[str]:
         if max_width and max_height:
@@ -541,10 +595,12 @@ class ControllerApp:
                 Messagebox.show_info(f"部分节点不支持 {codec}，将自动使用支持的节点执行", "提示")
             target_workers = supported_workers
 
+        output_suffix = self._get_output_suffix()
         tasks = self.controller.create_tasks_for_files(
             self.selected_files,
             ffmpeg_args,
             max_attempts=2,
+            output_suffix=output_suffix,
         )
         self.current_tasks = tasks
 
@@ -633,6 +689,7 @@ class ControllerApp:
         for item in self.files_tree.get_children():
             self.files_tree.delete(item)
 
+        output_suffix = self._get_output_suffix()
         for file_path in self.selected_files:
             task = self._get_task_by_input(file_path)
             file_name = os.path.basename(file_path)
@@ -647,7 +704,7 @@ class ControllerApp:
                 status_text = "待开始"
                 progress_text = "0%"
                 worker_text = ""
-                output_text = os.path.basename(self.controller.build_output_path(file_path))
+                output_text = os.path.basename(self.controller.build_output_path(file_path, suffix=output_suffix))
 
             self.files_tree.insert(
                 "",
