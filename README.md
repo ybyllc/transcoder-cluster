@@ -367,7 +367,8 @@ GET /status
 transcoder-cluster/
 ├── .github/
 │   └── workflows/
-│       └── python-tests.yml    # GitHub Actions CI
+│       ├── python-tests.yml    # GitHub Actions CI
+│       └── release.yml         # Windows 打包与 Release 发布
 ├── transcoder_cluster/         # 核心包
 │   ├── __init__.py
 │   ├── core/
@@ -519,13 +520,18 @@ PRESETS["my_custom_preset"] = TranscodePreset(
 
 ## 📝 更新日志
 
-### v1.0.0 (当前版本)
-- ✅ 基础分布式转码功能
-- ✅ 命令行和 GUI 两种模式
-- ✅ UDP 广播节点发现
-- ✅ 实时进度监控
-- ✅ 内置转码预设
-- ✅ Python API
+### v0.2.0 (当前版本)
+- ✅ 主控端 GUI 重构为单页流程工作台，操作更直观
+- ✅ 支持自动派发到所有节点（节点空闲自动领取新任务）
+- ✅ 新增编码器能力检测（重点检测 NVENC 并提示支持情况）
+- ✅ 新增“成功后删除原文件”可选项（仅删除成功任务的源文件）
+- ✅ 优化 Worker 停止逻辑与发现服务关闭稳定性，降低卡死风险
+- ✅ CLI/GUI 增加版本与 FFmpeg 检测信息展示
+- ✅ 修复 Release 打包工作流，可手动补发指定标签发布
+
+### v0.1.0
+- ✅ 初版分布式转码框架
+- ✅ Worker 节点发现、任务提交与结果下载能力
 
 ### 计划功能
 - [ ] 异步传输优化
