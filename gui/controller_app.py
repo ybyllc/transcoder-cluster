@@ -131,14 +131,17 @@ class ControllerApp:
 
         ttk.Button(files_frame, text="添加文件", bootstyle="primary", command=self._add_files, padding=BTN_PADDING).pack(side=LEFT)
         ttk.Button(files_frame, text="添加文件夹", bootstyle="info", command=self._add_folder, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(files_frame, text="清空列表", bootstyle="secondary", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(files_frame, text="清空列表", bootstyle="danger", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
 
-        suffix_row = ttk.Frame(files_frame)
-        suffix_row.pack(fill=X, pady=(8, 0))
-        ttk.Label(suffix_row, text="输出后缀").pack(side=LEFT)
+        suffix_label_row = ttk.Frame(files_frame)
+        suffix_label_row.pack(fill=X, pady=(8, 0))
+        ttk.Label(suffix_label_row, text="输出文件后缀：").pack(anchor=W)
+
+        suffix_input_row = ttk.Frame(files_frame)
+        suffix_input_row.pack(fill=X, pady=(4, 0))
         self.output_suffix_var = ttk.StringVar(value="_transcoded")
-        ttk.Entry(suffix_row, textvariable=self.output_suffix_var, width=18).pack(side=LEFT, padx=(8, 0))
-        ttk.Label(suffix_row, text="默认: _transcoded", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
+        ttk.Entry(suffix_input_row, textvariable=self.output_suffix_var, width=18).pack(side=LEFT)
+        ttk.Label(suffix_input_row, text="默认: _transcoded", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
 
         cfg_frame = ttk.Labelframe(self.left_frame, text="转码配置", padding=10)
         cfg_frame.pack(fill=X, pady=(0, 8))
@@ -195,11 +198,11 @@ class ControllerApp:
             bootstyle="danger",
         ).pack(side=LEFT, padx=(8, 0))
 
-        dispatch_frame = ttk.Labelframe(self.left_frame, text="派发模式", padding=10)
+        dispatch_frame = ttk.Labelframe(self.left_frame, text="任务模式", padding=10)
         dispatch_frame.pack(fill=X, pady=(0, 8))
 
         self.dispatch_mode_var = ttk.StringVar(value="auto")
-        ttk.Radiobutton(dispatch_frame, text="自动派发到所有节点", variable=self.dispatch_mode_var, value="auto", command=self._on_dispatch_mode_changed).pack(anchor=W)
+        ttk.Radiobutton(dispatch_frame, text="自动分配节点任务", variable=self.dispatch_mode_var, value="auto", command=self._on_dispatch_mode_changed).pack(anchor=W)
 
         single_row = ttk.Frame(dispatch_frame)
         single_row.pack(fill=X, pady=(6, 0))
@@ -237,7 +240,7 @@ class ControllerApp:
         self.start_btn.pack(fill=X)
 
     def _create_right_file_panel(self):
-        files_frame = ttk.Labelframe(self.right_frame, text="文件列表与任务进度", padding=8)
+        files_frame = ttk.Labelframe(self.right_frame, text="任务列表", padding=8)
         files_frame.pack(fill=BOTH, expand=YES)
 
         columns = ("file", "source", "status", "progress", "worker", "output")
@@ -264,7 +267,7 @@ class ControllerApp:
         ttk.Button(
             list_actions,
             text="清空列表",
-            bootstyle="secondary",
+            bootstyle="danger",
             command=self._clear_files,
             padding=BTN_PADDING,
         ).pack(side=RIGHT)
@@ -288,14 +291,15 @@ class ControllerApp:
         self.overall_label_var = ttk.StringVar(value="总进度: 0% (0/0)")
         ttk.Label(total_frame, textvariable=self.overall_label_var).pack(anchor=W, pady=(4, 0))
 
-        nodes_frame = ttk.Labelframe(self.bottom_frame, text="节点状态", padding=8)
+        nodes_frame = ttk.Frame(self.bottom_frame, padding=8)
         nodes_frame.pack(fill=X, pady=(8, 0))
 
         nodes_header = ttk.Frame(nodes_frame)
         nodes_header.pack(fill=X, pady=(0, 6))
+        ttk.Label(nodes_header, text="节点状态").pack(side=LEFT)
         ttk.Button(
             nodes_header,
-            text="刷新节点",
+            text="刷新",
             bootstyle="secondary",
             command=self._refresh_nodes_now,
             padding=BTN_PADDING,
