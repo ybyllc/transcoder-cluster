@@ -12,6 +12,7 @@ import logging
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+from ttkbootstrap.dialogs import Messagebox
 from ttkbootstrap.widgets import ToolTip
 from ttkbootstrap.widgets.scrolled import ScrolledText
 from datetime import datetime
@@ -57,9 +58,15 @@ class WorkerApp:
         self.responder: DiscoveryResponder = None
         self._runtime_log_handler = None
         self._progress_log_index = None
+        self._is_minimized_to_taskbar = False
 
         # 创建界面
         self._create_ui()
+
+        # 窗口事件：点击 × 时询问，点击 _ 时自动最小化后台运行
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close_request)
+        self.root.bind("<Unmap>", self._on_window_unmap, add="+")
+        self.root.bind("<Map>", self._on_window_map, add="+")
         
         # 定时刷新状态
         self._schedule_refresh()
@@ -186,6 +193,53 @@ class WorkerApp:
         
         # 记录启动时间
         self.start_time = None
+
+    @staticmethod
+    def _is_confirmed_yes(confirm) -> bool:
+        """兼容 Messagebox.yesno 在不同平台/主题下的返回值。"""
+        if isinstance(confirm, bool):
+            return confirm
+        return str(confirm).strip().lower() in {"yes", "true", "ok", "1"}
+
+    def _minimize_to_taskbar(self, show_log: bool = True):
+        """最小化到任务栏，Worker 继续后台运行。"""
+        try:
+            self.root.iconify()
+            self._is_minimized_to_taskbar = True
+            if show_log:
+                self._log("窗口已最小化到任务栏，子节点继续后台运行")
+        except Exception as error:
+            logger.debug(f"最小化窗口失败: {error}")
+
+    def _on_window_unmap(self, _event=None):
+        """处理窗口最小化（标题栏 _ 按钮）。"""
+        try:
+            if str(self.root.state()) == "iconic" and not self._is_minimized_to_taskbar:
+                self._is_minimized_to_taskbar = True
+                self._log("窗口已最小化到任务栏，子节点继续后台运行")
+        except Exception:
+            pass
+
+    def _on_window_map(self, _event=None):
+        """处理窗口恢复。"""
+        try:
+            if str(self.root.state()) == "normal" and self._is_minimized_to_taskbar:
+                self._is_minimized_to_taskbar = False
+                self._log("窗口已恢复到前台")
+        except Exception:
+            pass
+
+    def _on_window_close_request(self):
+        """点击窗口 × 时，询问最小化到任务栏还是退出。"""
+        confirm = Messagebox.yesno(
+            "是否最小化到任务栏并在后台继续运行？\n选择“否”将停止子节点并退出。",
+            "关闭确认",
+        )
+        if self._is_confirmed_yes(confirm):
+            self._minimize_to_taskbar(show_log=True)
+            return
+        self._log("正在关闭窗口...")
+        self.close(on_complete=lambda: self.root.after(0, self.root.destroy))
     
     def _log(self, message: str):
         """添加日志"""
@@ -452,29 +506,6 @@ def main():
     # 自动启动 Worker
     root.after(100, app._start_worker)
     
-    def on_close():
-        app._log("正在关闭窗口...")
-        # 先隐藏窗口，然后异步关闭
-        root.withdraw()
-        
-        def do_close():
-            if app.heartbeat:
-                app.heartbeat.stop()
-            
-            if app.responder:
-                app.responder.stop()
-            
-            if app.worker:
-                app.worker.stop()
-
-            app._remove_runtime_log_bridge()
-
-            # 在主线程中销毁窗口
-            root.after(0, root.destroy)
-        
-        threading.Thread(target=do_close, daemon=True).start()
-    
-    root.protocol("WM_DELETE_WINDOW", on_close)
     app.run()
 
 
