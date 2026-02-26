@@ -33,13 +33,15 @@ logger = get_logger(__name__)
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
 CODEC_OPTIONS = ["libx265", "libx264", "hevc_nvenc", "h264_nvenc"]
 CODEC_DEFAULT_QUALITY_HINTS = {
-    "libx265": "官方默认 CRF 28（不加 -crf）",
-    "libx264": "官方默认 CRF 23（不加 -crf）",
-    "hevc_nvenc": "官方默认自动质量（不加 -cq）",
-    "h264_nvenc": "官方默认自动质量（不加 -cq）",
+    "libx265": "默认 CRF 28",
+    "libx264": "默认 CRF 23",
+    "hevc_nvenc": "默认自动质量",
+    "h264_nvenc": "默认自动质量",
 }
+
+# UI 默认尺寸
 BTN_PADDING = (10, 7)
-LEFT_PANEL_DEFAULT_WIDTH = 470
+LEFT_PANEL_DEFAULT_WIDTH = 500
 RIGHT_PANEL_MIN_WIDTH = 760
 PANE_MIN_LEFT_WIDTH = 260
 PANE_MAX_LEFT_WIDTH = 550
@@ -213,7 +215,7 @@ class ControllerApp:
         files_button_row.pack(fill=X)
         ttk.Button(files_button_row, text="添加文件", bootstyle="primary", command=self._add_files, padding=BTN_PADDING).pack(side=LEFT)
         ttk.Button(files_button_row, text="添加文件夹", bootstyle="info", command=self._add_folder, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(files_button_row, text="清空列表", bootstyle="danger", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(12, 0))
+        ttk.Button(files_button_row, text="清空列表", bootstyle="danger", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(20, 0))
 
         suffix_row = ttk.Frame(files_frame)
         suffix_row.pack(fill=X, pady=(8, 0))
@@ -299,7 +301,7 @@ class ControllerApp:
         dispatch_frame.pack(fill=X, pady=(0, 8))
 
         self.dispatch_mode_var = ttk.StringVar(value="auto")
-        ttk.Radiobutton(dispatch_frame, text="自动分配节点任务", variable=self.dispatch_mode_var, value="auto", command=self._on_dispatch_mode_changed).pack(anchor=W)
+        ttk.Radiobutton(dispatch_frame, text="分配任务至全部节点", variable=self.dispatch_mode_var, value="auto", command=self._on_dispatch_mode_changed).pack(anchor=W)
 
         single_row = ttk.Frame(dispatch_frame)
         single_row.pack(fill=X, pady=(6, 0))
@@ -307,12 +309,12 @@ class ControllerApp:
         ttk.Radiobutton(single_row, text="指定节点 IP", variable=self.dispatch_mode_var, value="single", command=self._on_dispatch_mode_changed).pack(side=LEFT)
 
         self.node_var = ttk.StringVar()
-        self.node_combo = ttk.Combobox(single_row, textvariable=self.node_var, state="readonly", width=18)
+        self.node_combo = ttk.Combobox(single_row, textvariable=self.node_var, state="readonly", width=15)
         self.node_combo.pack(side=LEFT, padx=(8, 0))
 
         ttk.Button(
             single_row,
-            text="刷新节点",
+            text="刷新",
             width=6,
             bootstyle="secondary",
             command=self._broadcast_discovery,
@@ -546,7 +548,7 @@ class ControllerApp:
     def _add_files(self):
         paths = filedialog.askopenfilenames(
             title="选择视频文件",
-            filetypes=[("视频文件", "*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.m4v *.ts *.webm"), ("所有文件", "*.*")],
+            filetypes=[("视频文件", "*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.m4v *.ts *.webm *.rmvb *.rm *.3gp"), ("所有文件", "*.*")],
         )
         self._add_input_paths(list(paths))
 
@@ -671,9 +673,8 @@ class ControllerApp:
             codec = "libx265"
         default_hint = self._get_codec_default_quality_hint(codec)
         return (
-            "值越小，画质越好，体积越大。"
-            "填 0 表示默认（自动，不加 -crf/-cq 参数）。"
-            f"当前编码器 {codec}：{default_hint}。"
+            "值越小，画质越好，体积越大。填0表示默认\n"
+            f"{codec}：{default_hint}。"
         )
 
     def _update_crf_tooltip(self):
