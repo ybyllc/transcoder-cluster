@@ -231,6 +231,26 @@ class ControllerApp:
         
         ttk.Button(node_frame, text="刷新", command=self._refresh_node_combo).pack(side=tk.LEFT, padx=5)
         
+        # 选项
+        options_frame = ttk.LabelFrame(self.transcode_tab, text="选项")
+        options_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.delete_original_var = tk.BooleanVar(value=False)
+        delete_check = ttk.Checkbutton(
+            options_frame,
+            text="成功后删除原文件",
+            variable=self.delete_original_var
+        )
+        delete_check.pack(side=tk.LEFT, padx=5)
+        
+        # 红色警告标签
+        warning_label = ttk.Label(
+            options_frame,
+            text="⚠️ 谨慎选择：删除后无法恢复！",
+            foreground="red"
+        )
+        warning_label.pack(side=tk.LEFT, padx=10)
+        
         # 开始按钮
         ttk.Button(self.transcode_tab, text="开始转码", command=self._start_transcode).pack(pady=20)
     
@@ -393,7 +413,7 @@ class ControllerApp:
             # 自动设置输出路径
             if not self.output_path_var.get():
                 base, ext = os.path.splitext(path)
-                self.output_path_var.set(f"{base}_output{ext}")
+                self.output_path_var.set(f"{base}_transcoded{ext}")
     
     def _browse_output(self):
         """浏览输出文件"""
@@ -523,6 +543,15 @@ class ControllerApp:
                             os.path.basename(output_file),
                             output_path
                         )
+                    
+                    # 删除原文件（如果选择了该选项）
+                    if self.delete_original_var.get():
+                        try:
+                            os.remove(input_path)
+                            self._log(f"已删除原文件: {input_path}")
+                        except Exception as e:
+                            self._log(f"删除原文件失败: {e}")
+                    
                     # 发送系统通知
                     send_system_notification("转码完成", f"任务 {task.id} 已完成\n输出: {os.path.basename(output_path)}")
                     self.root.after(0, lambda: messagebox.showinfo("成功", f"转码完成: {output_path}"))
