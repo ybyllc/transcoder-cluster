@@ -33,7 +33,6 @@ logger = get_logger(__name__)
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
 CODEC_OPTIONS = ["libx265", "libx264", "hevc_nvenc", "h264_nvenc"]
 BTN_PADDING = (10, 7)
-BTN_FONT = ("Arial", 11, "bold")
 
 
 class ControllerApp:
@@ -58,7 +57,6 @@ class ControllerApp:
 
         self.user_config_path = os.path.join(os.getcwd(), "controller_gui_config.json")
         self._load_user_config()
-        self._configure_widget_styles()
 
         self._create_ui()
         self._check_local_ffmpeg()
@@ -67,13 +65,6 @@ class ControllerApp:
         self.discovery.start()
         self._broadcast_discovery()
         self._schedule_refresh()
-
-    def _configure_widget_styles(self):
-        """统一按钮与单选/复选字体样式。"""
-        style = getattr(self.root, "style", None) or ttk.Style()
-        style.configure("TButton", font=BTN_FONT)
-        style.configure("TRadiobutton", font=BTN_FONT)
-        style.configure("TCheckbutton", font=BTN_FONT)
 
     def _create_ui(self):
         main_frame = ttk.Frame(self.root, padding=10)
