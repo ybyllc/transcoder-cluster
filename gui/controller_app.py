@@ -33,15 +33,16 @@ logger = get_logger(__name__)
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
 CODEC_OPTIONS = ["libx265", "libx264", "hevc_nvenc", "h264_nvenc"]
 CODEC_DEFAULT_QUALITY_HINTS = {
-    "libx265": "默认 28（不加 -crf）",
-    "libx264": "默认 23（不加 -crf）",
-    "hevc_nvenc": "默认自动（不加 -cq）",
-    "h264_nvenc": "默认自动（不加 -cq）",
+    "libx265": "官方默认 CRF 28（不加 -crf）",
+    "libx264": "官方默认 CRF 23（不加 -crf）",
+    "hevc_nvenc": "官方默认自动质量（不加 -cq）",
+    "h264_nvenc": "官方默认自动质量（不加 -cq）",
 }
 BTN_PADDING = (10, 7)
 LEFT_PANEL_DEFAULT_WIDTH = 470
 RIGHT_PANEL_MIN_WIDTH = 760
 PANE_MIN_LEFT_WIDTH = 260
+PANE_MAX_LEFT_WIDTH = 550
 
 
 class ControllerApp:
@@ -128,6 +129,7 @@ class ControllerApp:
             self.content_pane.add(self.left_panel_frame)
             self.content_pane.add(self.right_frame)
         self.content_pane.bind("<Configure>", self._ensure_initial_pane_width, add="+")
+        self.content_pane.bind("<ButtonRelease-1>", self._ensure_initial_pane_width, add="+")
         self.root.after_idle(self._set_initial_pane_width)
 
         self.bottom_frame = ttk.Frame(main_frame)
@@ -149,12 +151,7 @@ class ControllerApp:
                     self.root.after(80, self._set_initial_pane_width)
                 return
 
-            max_left = max(PANE_MIN_LEFT_WIDTH, total_width - RIGHT_PANEL_MIN_WIDTH)
-            target = min(LEFT_PANEL_DEFAULT_WIDTH, max_left)
-            target = max(PANE_MIN_LEFT_WIDTH, target)
-            self.content_pane.sashpos(0, target)
-
-            if self.content_pane.sashpos(0) > 1:
+            if self._clamp_left_pane_width(preferred=LEFT_PANEL_DEFAULT_WIDTH):
                 self._pane_width_initialized = True
             elif self._pane_init_attempts < 12:
                 self._pane_init_attempts += 1
@@ -162,11 +159,36 @@ class ControllerApp:
         except Exception:
             pass
 
+    def _get_left_pane_bounds(self) -> Tuple[int, int]:
+        """计算左栏允许的最小/最大宽度。"""
+        total_width = self.content_pane.winfo_width()
+        if total_width <= 20:
+            return PANE_MIN_LEFT_WIDTH, PANE_MAX_LEFT_WIDTH
+
+        max_left_by_window = max(PANE_MIN_LEFT_WIDTH, total_width - RIGHT_PANEL_MIN_WIDTH)
+        max_left = min(PANE_MAX_LEFT_WIDTH, max_left_by_window)
+        if max_left < PANE_MIN_LEFT_WIDTH:
+            max_left = PANE_MIN_LEFT_WIDTH
+        return PANE_MIN_LEFT_WIDTH, max_left
+
+    def _clamp_left_pane_width(self, preferred: Optional[int] = None) -> bool:
+        """将左栏宽度限制在允许范围内。"""
+        min_left, max_left = self._get_left_pane_bounds()
+        current = int(self.content_pane.sashpos(0))
+        target = int(preferred) if preferred is not None else current
+        target = max(min_left, min(max_left, target))
+
+        if current != target:
+            self.content_pane.sashpos(0, target)
+        self.left_panel_frame.configure(width=target)
+        return int(self.content_pane.sashpos(0)) > 1
+
     def _ensure_initial_pane_width(self, _event=None):
         """兜底保证首帧左栏不被压成 0。"""
-        if self._pane_width_initialized:
+        if not self._pane_width_initialized:
+            self._set_initial_pane_width()
             return
-        self._set_initial_pane_width()
+        self._clamp_left_pane_width()
 
     def _create_left_flow_panel(self):
         ffmpeg_frame = ttk.Frame(self.left_frame, padding=(0, 0, 0, 8))
@@ -195,10 +217,13 @@ class ControllerApp:
 
         suffix_row = ttk.Frame(files_frame)
         suffix_row.pack(fill=X, pady=(8, 0))
-        ttk.Label(suffix_row, text="输出文件后缀：").pack(side=LEFT)
+        suffix_label = ttk.Label(suffix_row, text="输出文件后缀：")
+        suffix_label.pack(side=LEFT)
+        ToolTip(suffix_label, text="默认值是 _transcoded；留空会自动使用默认值。")
         self.output_suffix_var = ttk.StringVar(value="_transcoded")
-        ttk.Entry(suffix_row, textvariable=self.output_suffix_var, width=18).pack(side=LEFT, padx=(6, 0))
-        ttk.Label(suffix_row, text="默认: _transcoded", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
+        suffix_entry = ttk.Entry(suffix_row, textvariable=self.output_suffix_var, width=18)
+        suffix_entry.pack(side=LEFT, padx=(6, 0))
+        ToolTip(suffix_entry, text="默认值是 _transcoded；留空会自动使用默认值。")
 
         cfg_frame = ttk.Labelframe(self.left_frame, text="转码配置", padding=10)
         cfg_frame.pack(fill=X, pady=(0, 8))
@@ -227,13 +252,13 @@ class ControllerApp:
 
         crf_label = ttk.Label(cfg_frame, text="CRF/CQ:")
         crf_label.grid(row=2, column=0, sticky=W, pady=3)
-        ToolTip(crf_label, text="值越小，画质越好，体积越大。留空时使用编码器默认值。")
+        self.crf_label_tooltip = ToolTip(crf_label, text="")
         crf_row = ttk.Frame(cfg_frame)
         crf_row.grid(row=2, column=1, sticky=W, pady=3)
         self.crf_var = ttk.StringVar(value="28")
-        ttk.Entry(crf_row, textvariable=self.crf_var, width=10).pack(side=LEFT)
-        self.crf_default_hint_var = ttk.StringVar(value="")
-        ttk.Label(crf_row, textvariable=self.crf_default_hint_var, bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
+        crf_entry = ttk.Entry(crf_row, textvariable=self.crf_var, width=10)
+        crf_entry.pack(side=LEFT)
+        self.crf_entry_tooltip = ToolTip(crf_entry, text="")
 
         resolution_label = ttk.Label(cfg_frame, text="最大分辨率:")
         resolution_label.grid(row=3, column=0, sticky=W, pady=3)
@@ -294,7 +319,7 @@ class ControllerApp:
             padding=BTN_PADDING,
         ).pack(side=LEFT, padx=(6, 0))
 
-        self._update_crf_default_hint()
+        self._update_crf_tooltip()
         self._on_preset_changed()
         self._on_dispatch_mode_changed()
 
@@ -630,19 +655,31 @@ class ControllerApp:
             self.max_width_var.set(width)
             self.max_height_var.set(height)
 
-        self._update_crf_default_hint()
+        self._update_crf_tooltip()
         self._update_codec_support_hint()
 
     def _on_codec_changed(self, _event=None):
-        self._update_crf_default_hint()
+        self._update_crf_tooltip()
         self._update_codec_support_hint()
 
     def _get_codec_default_quality_hint(self, codec: str) -> str:
-        return CODEC_DEFAULT_QUALITY_HINTS.get(codec, "留空时使用编码器默认值")
+        return CODEC_DEFAULT_QUALITY_HINTS.get(codec, "使用编码器官方默认值")
 
-    def _update_crf_default_hint(self):
+    def _build_crf_tooltip_text(self) -> str:
         codec = self.codec_var.get().strip()
-        self.crf_default_hint_var.set(self._get_codec_default_quality_hint(codec))
+        if not codec:
+            codec = "libx265"
+        default_hint = self._get_codec_default_quality_hint(codec)
+        return (
+            "值越小，画质越好，体积越大。"
+            "填 0 表示默认（自动，不加 -crf/-cq 参数）。"
+            f"当前编码器 {codec}：{default_hint}。"
+        )
+
+    def _update_crf_tooltip(self):
+        text = self._build_crf_tooltip_text()
+        self.crf_label_tooltip.text = text
+        self.crf_entry_tooltip.text = text
 
     def _on_dispatch_mode_changed(self):
         mode = self.dispatch_mode_var.get()
@@ -674,9 +711,14 @@ class ControllerApp:
         codec = self.codec_var.get().strip() or (preset.codec if preset else "libx265")
 
         crf_value = None
+        use_codec_default_quality = False
         crf_text = self.crf_var.get().strip()
         if crf_text:
-            crf_value = int(crf_text)
+            parsed_crf = int(crf_text)
+            if parsed_crf == 0:
+                use_codec_default_quality = True
+            else:
+                crf_value = parsed_crf
         elif preset and preset.crf is not None:
             crf_value = preset.crf
 
@@ -691,7 +733,7 @@ class ControllerApp:
         if scale_filter:
             args.extend(["-vf", scale_filter])
 
-        if crf_value is not None and codec and codec != "none":
+        if not use_codec_default_quality and crf_value is not None and codec and codec != "none":
             if "_nvenc" in codec:
                 args.extend(["-cq", str(crf_value)])
             else:
