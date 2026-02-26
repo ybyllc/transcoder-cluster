@@ -62,6 +62,9 @@ class ControllerApp:
         self.node_capabilities: Dict[str, Dict[str, Any]] = {}
         self.node_runtime_status: Dict[str, Dict[str, Any]] = {}
         self._capabilities_fetching: set = set()
+        self.active_worker_ips: List[str] = []
+        self._stop_in_progress = False
+        self._stop_worker_requests_done = True
 
         self.running = False
         self.dispatch_thread: Optional[threading.Thread] = None
@@ -339,13 +342,25 @@ class ControllerApp:
         )
         self.start_btn.pack(fill=X)
 
+    def _set_run_button_mode(self, running: bool, stopping: bool = False):
+        """切换开始/停止按钮状态。"""
+        if stopping:
+            self.start_btn.config(text="停止中", bootstyle="secondary", state=DISABLED, command=self._stop_transcode)
+            return
+
+        if running:
+            self.start_btn.config(text="停止转码", bootstyle="danger", state=NORMAL, command=self._stop_transcode)
+        else:
+            self.start_btn.config(text="开始转码", bootstyle="success", state=NORMAL, command=self._start_transcode)
+
     def _create_right_file_panel(self):
         files_frame = ttk.Labelframe(self.right_frame, text="文件列表", padding=8)
         files_frame.pack(fill=BOTH, expand=YES)
 
-        columns = ("file", "source", "status", "progress", "worker", "output")
+        columns = ("task_no", "file", "source", "status", "progress", "worker", "output")
         self.files_tree = ttk.Treeview(files_frame, columns=columns, show="headings", bootstyle="primary")
 
+        self.files_tree.heading("task_no", text="任务号")
         self.files_tree.heading("file", text="文件")
         self.files_tree.heading("source", text="源分辨率")
         self.files_tree.heading("status", text="状态")
@@ -353,6 +368,7 @@ class ControllerApp:
         self.files_tree.heading("worker", text="节点")
         self.files_tree.heading("output", text="输出")
 
+        self.files_tree.column("task_no", width=70, anchor=CENTER)
         self.files_tree.column("file", width=240)
         self.files_tree.column("source", width=100, anchor=CENTER)
         self.files_tree.column("status", width=100, anchor=CENTER)
@@ -589,7 +605,7 @@ class ControllerApp:
         if not self.selected_files:
             return
         confirm = Messagebox.yesno("确认清空当前文件列表吗？", "确认")
-        if str(confirm).lower() != "yes":
+        if not self._is_confirmed_yes(confirm):
             return
         self.selected_files = []
         self.file_info_map = {}
@@ -612,7 +628,7 @@ class ControllerApp:
             return
 
         confirm = Messagebox.yesno("确认删除选中的任务吗？", "确认")
-        if str(confirm).lower() != "yes":
+        if not self._is_confirmed_yes(confirm):
             return
 
         self.selected_files = [path for path in self.selected_files if path != file_path]
@@ -830,18 +846,41 @@ class ControllerApp:
                 Messagebox.show_info(f"部分节点不支持 {codec}，将自动使用支持的节点执行", "提示")
             target_workers = supported_workers
 
+        # 二次启动时仅处理“新文件 + 未完成文件”，已完成任务默认跳过。
+        files_to_run: List[str] = []
+        retained_tasks: List[Task] = []
+        existing_task_map: Dict[str, Task] = {task.input_file: task for task in self.current_tasks}
+        skipped_completed = 0
+        for file_path in self.selected_files:
+            existing = existing_task_map.get(file_path)
+            if existing and str(existing.status).lower() == "completed":
+                retained_tasks.append(existing)
+                skipped_completed += 1
+                continue
+            files_to_run.append(file_path)
+
+        if not files_to_run:
+            Messagebox.show_info(f"没有待转码任务，已完成 {skipped_completed}/{len(self.selected_files)}", "提示")
+            self.current_tasks = retained_tasks
+            self._refresh_file_tree()
+            self._refresh_overall_progress()
+            return
+
         output_suffix = self._get_output_suffix()
         tasks = self.controller.create_tasks_for_files(
-            self.selected_files,
+            files_to_run,
             ffmpeg_args,
             max_attempts=2,
             output_suffix=output_suffix,
         )
-        self.current_tasks = tasks
+        self.current_tasks = retained_tasks + tasks
 
         self.running = True
+        self._stop_in_progress = False
+        self._stop_worker_requests_done = True
         self.dispatch_stop_event.clear()
-        self.start_btn.config(state=DISABLED)
+        self.active_worker_ips = list(dict.fromkeys(target_workers))
+        self._set_run_button_mode(running=True)
 
         self._refresh_file_tree()
         self._refresh_overall_progress()
@@ -869,6 +908,60 @@ class ControllerApp:
         self.dispatch_thread = threading.Thread(target=dispatch_runner, daemon=True)
         self.dispatch_thread.start()
 
+    def _collect_active_worker_ips(self) -> List[str]:
+        workers = list(self.active_worker_ips)
+        for task in self.current_tasks:
+            if task.worker and str(task.status or "").lower() in ("uploading", "processing"):
+                workers.append(task.worker)
+        deduped = []
+        seen = set()
+        for ip in workers:
+            if ip and ip not in seen:
+                seen.add(ip)
+                deduped.append(ip)
+        return deduped
+
+    def _stop_transcode(self):
+        if not self.running or self._stop_in_progress:
+            return
+        confirm = Messagebox.yesno("确认停止当前转码任务吗？", "确认")
+        if not self._is_confirmed_yes(confirm):
+            return
+
+        self._stop_in_progress = True
+        self._stop_worker_requests_done = False
+        self.dispatch_stop_event.set()
+        self._set_run_button_mode(running=True, stopping=True)
+        worker_ips = self._collect_active_worker_ips()
+
+        def stop_runner():
+            stop_results: Dict[str, bool] = {}
+            for worker_ip in worker_ips:
+                ok = self.controller.stop_worker_task(worker_ip)
+                stop_results[worker_ip] = ok
+                if not ok:
+                    logger.warning("停止节点任务失败: %s", worker_ip)
+            self.root.after(0, self._on_stop_worker_requests_done, stop_results)
+
+        threading.Thread(target=stop_runner, daemon=True).start()
+
+    def _on_stop_worker_requests_done(self, _stop_results: Dict[str, bool]):
+        self._stop_worker_requests_done = True
+        self._finalize_stop_button_if_ready()
+
+    def _finalize_stop_button_if_ready(self):
+        """仅在停止请求和调度线程都结束后恢复按钮。"""
+        if not self._stop_in_progress:
+            return
+        if self.running:
+            return
+        if not self._stop_worker_requests_done:
+            self._set_run_button_mode(running=True, stopping=True)
+            return
+        self._stop_in_progress = False
+        self._stop_worker_requests_done = True
+        self._set_run_button_mode(running=False)
+
     def _on_task_runtime_update(self, _task: Task):
         self._refresh_file_tree()
         self._refresh_overall_progress()
@@ -885,7 +978,11 @@ class ControllerApp:
 
     def _on_dispatch_finished(self, result: Dict[str, Any]):
         self.running = False
-        self.start_btn.config(state=NORMAL)
+        self.active_worker_ips = []
+        if self._stop_in_progress:
+            self._finalize_stop_button_if_ready()
+        else:
+            self._set_run_button_mode(running=False)
         self._refresh_file_tree()
         self._refresh_overall_progress()
 
@@ -913,7 +1010,11 @@ class ControllerApp:
 
     def _on_dispatch_error(self, error_message: str):
         self.running = False
-        self.start_btn.config(state=NORMAL)
+        self.active_worker_ips = []
+        if self._stop_in_progress:
+            self._finalize_stop_button_if_ready()
+        else:
+            self._set_run_button_mode(running=False)
         Messagebox.show_error(f"任务执行异常: {error_message}", "错误")
 
     def _delete_completed_original_files(self) -> Tuple[int, List[str]]:
@@ -963,6 +1064,17 @@ class ControllerApp:
                 return task
         return None
 
+    def _get_task_display_no(self, task: Optional[Task], fallback_index: int) -> str:
+        """任务号展示：优先使用 task_x 的编号，未创建任务时使用列表序号。"""
+        if not task:
+            return str(fallback_index)
+        task_id = str(task.id or "")
+        if task_id.startswith("task_"):
+            suffix = task_id.split("_", 1)[1]
+            if suffix.isdigit():
+                return suffix
+        return task_id or str(fallback_index)
+
     def _get_status_value(self, status: Any) -> str:
         """标准化节点状态值，便于比较。"""
         if isinstance(status, dict):
@@ -970,6 +1082,13 @@ class ControllerApp:
         if status is None:
             return "unknown"
         return str(status).lower()
+
+    @staticmethod
+    def _is_confirmed_yes(confirm: Any) -> bool:
+        """兼容 Messagebox.yesno 在不同平台/主题下的返回值。"""
+        if isinstance(confirm, bool):
+            return confirm
+        return str(confirm).strip().lower() in {"yes", "true", "ok", "1"}
 
     def _format_task_status(self, status: str) -> str:
         mapping = {
@@ -988,8 +1107,9 @@ class ControllerApp:
         self.file_tree_item_map = {}
 
         output_suffix = self._get_output_suffix()
-        for file_path in self.selected_files:
+        for index, file_path in enumerate(self.selected_files, start=1):
             task = self._get_task_by_input(file_path)
+            task_no = self._get_task_display_no(task, fallback_index=index)
             file_name = os.path.basename(file_path)
             source_resolution = self.file_info_map.get(file_path, "--")
 
@@ -1007,7 +1127,7 @@ class ControllerApp:
             item_id = self.files_tree.insert(
                 "",
                 END,
-                values=(file_name, source_resolution, status_text, progress_text, worker_text, output_text),
+                values=(task_no, file_name, source_resolution, status_text, progress_text, worker_text, output_text),
             )
             self.file_tree_item_map[item_id] = file_path
 
@@ -1016,9 +1136,9 @@ class ControllerApp:
             state = status.get("status", "unknown")
             progress = int(status.get("progress", 0))
             if state in ("receiving", "uploading"):
-                return f"上传中({progress}%)"
+                return f"上传中"
             if state == "processing":
-                return f"处理中({progress}%)"
+                return f"处理中"
             if state in ("idle", "completed"):
                 return "空闲"
             if state == "error":
@@ -1096,7 +1216,16 @@ class ControllerApp:
             self.overall_label_var.set(f"总进度: 0% (0/{total})")
             return
 
-        progress_sum = sum(max(0, min(100, int(task.progress))) for task in self.current_tasks)
+        progress_sum = 0
+        for task in self.current_tasks:
+            task_status = str(task.status or "").lower()
+            if task_status == "completed":
+                progress_sum += 100
+            elif task_status == "processing":
+                progress_sum += max(0, min(100, int(task.progress)))
+            else:
+                # 上传中/等待中/失败等状态先不计入总进度
+                progress_sum += 0
         max_progress = len(self.current_tasks) * 100
         overall_percent = int(round((progress_sum * 100) / max_progress)) if max_progress else 0
         completed = sum(1 for task in self.current_tasks if task.status == "completed")

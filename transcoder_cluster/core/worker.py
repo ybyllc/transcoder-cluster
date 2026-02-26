@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Optional
@@ -89,10 +90,13 @@ def list_ffmpeg_encoders(ffmpeg_path: str) -> list:
 class WorkerHandler(BaseHTTPRequestHandler):
     """Worker HTTP 请求处理器"""
 
+    TASK_OUTPUT_TTL_SECONDS = 300
+
     # 类级别变量，用于存储状态
-    status: Dict[str, Any] = {"status": "idle", "current_task": None, "progress": 0}
+    status: Dict[str, Any] = {"status": "idle", "current_task": None, "progress": 0, "task_id": None}
     capabilities: Dict[str, Any] = {}
     on_task_complete: Optional[Callable] = None
+    _output_task_labels: Dict[str, str] = {}
     
     # 当前 FFmpeg 进程
     _ffmpeg_proc: Optional[subprocess.Popen] = None
@@ -100,23 +104,68 @@ class WorkerHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args) -> None:
         """重写日志方法，使用自定义 logger"""
-        logger.info("%s - %s", self.address_string(), format % args)
+        logger.debug("%s - %s", self.address_string(), format % args)
 
     def do_POST(self) -> None:
         """处理 POST 请求"""
         if self.path == "/task":
             self._handle_task()
+        elif self.path == "/stop":
+            self._handle_stop()
         else:
             self.send_error(404, "Not Found")
 
+    @staticmethod
+    def _safe_remove_file(file_path: Optional[str], reason: str = "", task_label: Optional[str] = None) -> None:
+        """安全删除任务文件。"""
+        if not file_path:
+            return
+        if not os.path.exists(file_path):
+            return
+        try:
+            os.remove(file_path)
+            task_hint = f"任务号 {task_label}" if task_label else "任务文件"
+            if reason:
+                logger.info(f"已清理{task_hint}（{reason}）")
+            else:
+                logger.info(f"已清理{task_hint}")
+        except Exception as error:
+            logger.warning(f"清理任务文件失败: {file_path} | {error}")
+
+    @classmethod
+    def _schedule_cleanup(
+        cls,
+        file_path: Optional[str],
+        delay_seconds: int,
+        reason: str,
+        task_label: Optional[str] = None,
+    ) -> None:
+        """延迟清理，避免任务结果长期残留。"""
+        if not file_path:
+            return
+
+        def delayed_cleanup():
+            time.sleep(delay_seconds)
+            cls._output_task_labels.pop(os.path.basename(file_path), None)
+            cls._safe_remove_file(file_path, reason=reason, task_label=task_label)
+
+        threading.Thread(target=delayed_cleanup, daemon=True).start()
+
     def _handle_task(self) -> None:
         """处理转码任务"""
+        input_path = None
+        output_path = None
+        transcode_success = False
+        task_label = None
         try:
+            # 新任务开始前清理历史停止标志。
+            WorkerHandler._stop_requested = False
             # 更新状态为接收中
             WorkerHandler.status = {
                 "status": "receiving",
                 "current_task": None,
                 "progress": 0,
+                "task_id": None,
                 "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             
@@ -145,6 +194,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
             # 解析任务数据
             post_data = b"".join(chunks)
             task = json.loads(post_data.decode())
+            task_label = str(task.get("task_id") or "unknown")
+            WorkerHandler.status["task_id"] = task_label
             video_file = task["video_file"]
             ffmpeg_args = task["ffmpeg_args"]
 
@@ -157,7 +208,11 @@ class WorkerHandler(BaseHTTPRequestHandler):
             input_path = file_path
             output_path = os.path.join(config.work_dir, "output_" + video_file["name"])
 
-            result = self._execute_ffmpeg(input_path, output_path, ffmpeg_args)
+            result = self._execute_ffmpeg(input_path, output_path, ffmpeg_args, task_label=task_label)
+            transcode_success = result.get("status") == "success"
+
+            if transcode_success and output_path:
+                self._output_task_labels[os.path.basename(output_path)] = task_label
 
             # 返回结果
             self.send_response(200)
@@ -171,9 +226,25 @@ class WorkerHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode())
+        finally:
+            # 输入文件在任务结束后即删除，避免源视频滞留。
+            self._safe_remove_file(input_path, reason="任务结束", task_label=task_label)
+            # 失败任务产物立即删除，避免无效输出长期残留。
+            if not transcode_success:
+                if output_path:
+                    self._output_task_labels.pop(os.path.basename(output_path), None)
+                self._safe_remove_file(output_path, reason="任务失败", task_label=task_label)
+            else:
+                # 成功任务输出由下载接口优先清理，并加超时兜底。
+                self._schedule_cleanup(
+                    output_path,
+                    delay_seconds=self.TASK_OUTPUT_TTL_SECONDS,
+                    reason=f"超时未下载自动清理({self.TASK_OUTPUT_TTL_SECONDS}s)",
+                    task_label=task_label,
+                )
 
     def _execute_ffmpeg(
-        self, input_path: str, output_path: str, ffmpeg_args: list
+        self, input_path: str, output_path: str, ffmpeg_args: list, task_label: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         执行 FFmpeg 转码
@@ -190,11 +261,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
             "status": "processing",
             "current_task": input_path,
             "progress": 0,
+            "task_id": task_label,
             "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        
-        # 重置停止标志
-        WorkerHandler._stop_requested = False
 
         cmd = [config.ffmpeg_path, "-y", "-i", input_path] + ffmpeg_args + [output_path]
         logger.info(f"开始转码: {' '.join(cmd)}")
@@ -242,6 +311,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         "status": "stopped",
                         "current_task": None,
                         "progress": 0,
+                        "task_id": task_label,
                         "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }
                     logger.info("FFmpeg 进程已终止")
@@ -269,11 +339,22 @@ class WorkerHandler(BaseHTTPRequestHandler):
             proc.wait()
             WorkerHandler._ffmpeg_proc = None
 
+            if WorkerHandler._stop_requested:
+                WorkerHandler.status = {
+                    "status": "stopped",
+                    "current_task": None,
+                    "progress": 0,
+                    "task_id": task_label,
+                    "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                return {"status": "stopped", "error": "转码被用户中断"}
+
             if proc.returncode == 0:
                 WorkerHandler.status = {
                     "status": "completed",
                     "current_task": None,
                     "progress": 100,
+                    "task_id": task_label,
                     "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
                 logger.info(f"转码完成: {output_path}")
@@ -283,6 +364,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     "status": "error",
                     "current_task": None,
                     "progress": 0,
+                    "task_id": task_label,
                     "error": f"FFmpeg 返回码: {proc.returncode}",
                 }
                 return {"status": "fail", "error": f"FFmpeg returned code {proc.returncode}"}
@@ -293,6 +375,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 "status": "error",
                 "current_task": None,
                 "progress": 0,
+                "task_id": task_label,
                 "error": str(e),
             }
             logger.error(f"转码失败: {e}")
@@ -328,14 +411,26 @@ class WorkerHandler(BaseHTTPRequestHandler):
         filename = query.get("file", [None])[0]
 
         if filename:
-            file_path = os.path.join(config.work_dir, filename)
+            safe_name = os.path.basename(filename)
+            file_path = os.path.join(config.work_dir, safe_name)
             if os.path.exists(file_path):
+                task_label = self._output_task_labels.pop(safe_name, None)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
                 self.end_headers()
-                with open(file_path, "rb") as f:
-                    self.wfile.write(f.read())
+                try:
+                    with open(file_path, "rb") as f:
+                        while True:
+                            chunk = f.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except Exception as error:
+                    logger.warning(f"下载响应异常: {safe_name} | {error}")
+                finally:
+                    # 结果一旦尝试下发即清理，避免隐私与空间泄漏。
+                    self._safe_remove_file(file_path, reason="下载完成后清理", task_label=task_label)
                 return
 
         self.send_response(404)
@@ -354,6 +449,25 @@ class WorkerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(WorkerHandler.status).encode())
+
+    def _handle_stop(self) -> None:
+        """处理停止当前任务请求。"""
+        WorkerHandler._stop_requested = True
+        proc = WorkerHandler._ffmpeg_proc
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception as error:
+                logger.debug(f"终止 FFmpeg 进程请求失败: {error}")
+
+        current_status = str(WorkerHandler.status.get("status", "")).lower()
+        if current_status in ("receiving", "uploading", "processing"):
+            WorkerHandler.status["status"] = "stopped"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "success"}).encode())
 
     @classmethod
     def _build_capabilities(cls) -> Dict[str, Any]:

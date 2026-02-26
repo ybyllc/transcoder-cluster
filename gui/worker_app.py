@@ -8,6 +8,7 @@ GUI Worker 节点应用
 
 import os
 import threading
+import logging
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -24,6 +25,24 @@ from transcoder_cluster.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class WorkerGuiLogHandler(logging.Handler):
+    """将运行时日志桥接到 GUI 文本框。"""
+
+    def __init__(self, app: "WorkerApp"):
+        super().__init__(level=logging.INFO)
+        self.app = app
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < logging.INFO:
+            return
+        if not str(record.name).startswith("transcoder_cluster"):
+            return
+        try:
+            self.app.root.after(0, self.app._append_runtime_log, record)
+        except Exception:
+            pass
+
+
 class WorkerApp:
     """GUI Worker 节点应用"""
     
@@ -36,7 +55,9 @@ class WorkerApp:
         # 发现服务
         self.heartbeat: HeartbeatService = None
         self.responder: DiscoveryResponder = None
-        
+        self._runtime_log_handler = None
+        self._progress_log_index = None
+
         # 创建界面
         self._create_ui()
         
@@ -168,11 +189,82 @@ class WorkerApp:
     
     def _log(self, message: str):
         """添加日志"""
-        self.log_text.text.config(state=NORMAL)
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(END, f"[{timestamp}] {message}\n")
+        self._append_log_line(f"[{timestamp}]  {message}")
+
+    def _append_log_line(self, line: str):
+        """向日志框追加一行文本。"""
+        if not getattr(self, "log_text", None):
+            return
+        if not self.log_text.text.winfo_exists():
+            return
+        self.log_text.text.config(state=NORMAL)
+        self.log_text.insert(END, f"{line}\n")
         self.log_text.see(END)
         self.log_text.text.config(state=DISABLED)
+
+    def _append_runtime_log(self, record: logging.LogRecord):
+        """将运行日志按用户可读格式写入 GUI。"""
+        if not getattr(self, "log_text", None):
+            return
+        if not self.log_text.text.winfo_exists():
+            return
+
+        message = record.getMessage().strip()
+        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        line = f"[{timestamp}]  {message}"
+        is_progress = message.startswith("转码进度:")
+
+        text_widget = self.log_text.text
+        text_widget.config(state=NORMAL)
+        if is_progress:
+            if self._progress_log_index:
+                try:
+                    text_widget.delete(self._progress_log_index, f"{self._progress_log_index} lineend+1c")
+                    text_widget.insert(self._progress_log_index, f"{line}\n")
+                except Exception:
+                    text_widget.insert(END, f"{line}\n")
+                    self._progress_log_index = text_widget.index("end-2l linestart")
+            else:
+                text_widget.insert(END, f"{line}\n")
+                self._progress_log_index = text_widget.index("end-2l linestart")
+            text_widget.see(self._progress_log_index)
+        else:
+            text_widget.insert(END, f"{line}\n")
+            text_widget.see(END)
+            if self._progress_log_index and (
+                message.startswith("转码完成")
+                or message.startswith("转码失败")
+                or message.startswith("收到停止请求")
+                or message.startswith("FFmpeg 进程已终止")
+            ):
+                self._progress_log_index = None
+        text_widget.config(state=DISABLED)
+
+    def _install_runtime_log_bridge(self):
+        """安装日志桥接，GUI 中显示与 CLI 一致的 INFO 日志。"""
+        if self._runtime_log_handler is not None:
+            return
+        self._progress_log_index = None
+        target_logger = logging.getLogger("transcoder_cluster")
+        if target_logger.level > logging.INFO:
+            target_logger.setLevel(logging.INFO)
+        handler = WorkerGuiLogHandler(self)
+        target_logger.addHandler(handler)
+        self._runtime_log_handler = handler
+
+    def _remove_runtime_log_bridge(self):
+        """卸载日志桥接，避免重复输出。"""
+        if self._runtime_log_handler is None:
+            self._progress_log_index = None
+            return
+        target_logger = logging.getLogger("transcoder_cluster")
+        try:
+            target_logger.removeHandler(self._runtime_log_handler)
+            self._runtime_log_handler.close()
+        finally:
+            self._runtime_log_handler = None
+            self._progress_log_index = None
     
     def _update_status_style(self, status: str):
         """根据状态更新样式"""
@@ -200,6 +292,9 @@ class WorkerApp:
         
         # 创建工作目录
         os.makedirs(work_dir, exist_ok=True)
+
+        # 启动前安装日志桥接，捕获完整运行日志。
+        self._install_runtime_log_bridge()
         
         # 启动 Worker（使用 start_async 在后台线程运行）
         self.worker = Worker(port=port, work_dir=work_dir)
@@ -251,6 +346,8 @@ class WorkerApp:
     
     def _on_stop_complete(self):
         """停止完成后的 UI 更新"""
+        self._remove_runtime_log_bridge()
+        self._progress_log_index = None
         # 重置启动时间
         self.start_time = None
         self.status_var.set("🔴 已停止")
@@ -333,7 +430,9 @@ class WorkerApp:
             
             if self.worker:
                 self.worker.stop()
-            
+
+            self._remove_runtime_log_bridge()
+
             if on_complete:
                 on_complete()
         
@@ -367,7 +466,9 @@ def main():
             
             if app.worker:
                 app.worker.stop()
-            
+
+            app._remove_runtime_log_bridge()
+
             # 在主线程中销毁窗口
             root.after(0, root.destroy)
         
