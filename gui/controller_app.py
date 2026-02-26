@@ -591,7 +591,7 @@ class ControllerApp:
         if not self.selected_files:
             return
         confirm = Messagebox.yesno("确认清空当前文件列表吗？", "确认")
-        if str(confirm).lower() != "yes":
+        if not self._is_confirmed_yes(confirm):
             return
         self.selected_files = []
         self.file_info_map = {}
@@ -614,7 +614,7 @@ class ControllerApp:
             return
 
         confirm = Messagebox.yesno("确认删除选中的任务吗？", "确认")
-        if str(confirm).lower() != "yes":
+        if not self._is_confirmed_yes(confirm):
             return
 
         self.selected_files = [path for path in self.selected_files if path != file_path]
@@ -984,6 +984,13 @@ class ControllerApp:
             return "unknown"
         return str(status).lower()
 
+    @staticmethod
+    def _is_confirmed_yes(confirm: Any) -> bool:
+        """兼容 Messagebox.yesno 在不同平台/主题下的返回值。"""
+        if isinstance(confirm, bool):
+            return confirm
+        return str(confirm).strip().lower() in {"yes", "true", "ok", "1"}
+
     def _format_task_status(self, status: str) -> str:
         mapping = {
             "pending": "等待中",
@@ -1030,9 +1037,9 @@ class ControllerApp:
             state = status.get("status", "unknown")
             progress = int(status.get("progress", 0))
             if state in ("receiving", "uploading"):
-                return f"上传中({progress}%)"
+                return f"上传中"
             if state == "processing":
-                return f"处理中({progress}%)"
+                return f"处理中"
             if state in ("idle", "completed"):
                 return "空闲"
             if state == "error":
@@ -1110,7 +1117,16 @@ class ControllerApp:
             self.overall_label_var.set(f"总进度: 0% (0/{total})")
             return
 
-        progress_sum = sum(max(0, min(100, int(task.progress))) for task in self.current_tasks)
+        progress_sum = 0
+        for task in self.current_tasks:
+            task_status = str(task.status or "").lower()
+            if task_status == "completed":
+                progress_sum += 100
+            elif task_status == "processing":
+                progress_sum += max(0, min(100, int(task.progress)))
+            else:
+                # 上传中/等待中/失败等状态先不计入总进度
+                progress_sum += 0
         max_progress = len(self.current_tasks) * 100
         overall_percent = int(round((progress_sum * 100) / max_progress)) if max_progress else 0
         completed = sum(1 for task in self.current_tasks if task.status == "completed")

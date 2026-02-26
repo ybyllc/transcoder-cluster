@@ -395,6 +395,8 @@ class Controller:
             while not stop_event.is_set():
                 task = pop_next_task(worker_ip)
                 if task is None:
+                    if on_node_update:
+                        on_node_update(worker_ip, {"status": "idle", "progress": 0})
                     return
 
                 task.worker = worker_ip
@@ -496,6 +498,23 @@ class Controller:
         finally:
             poll_stop.set()
             poll_thread.join(timeout=1)
+            if on_node_update:
+                final_status = self.get_worker_status(worker_ip)
+                if final_status.get("status") == "unknown":
+                    task_state = str(task.status or "").lower()
+                    if task_state == "completed":
+                        final_status = {"status": "completed", "progress": 100, "task_id": task.id}
+                    elif task_state in ("failed", "error"):
+                        final_status = {"status": "error", "progress": 0, "task_id": task.id}
+                    elif task_state in ("uploading", "processing"):
+                        final_status = {
+                            "status": task_state,
+                            "progress": max(0, min(100, int(task.progress))),
+                            "task_id": task.id,
+                        }
+                    else:
+                        final_status = {"status": "idle", "progress": 0}
+                on_node_update(worker_ip, final_status)
 
     def _validate_output_file(self, output_path: str) -> Tuple[bool, str]:
         """校验输出文件存在且大小有效。"""
