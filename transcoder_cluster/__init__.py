@@ -30,13 +30,17 @@ def _read_version_from_pyproject() -> str:
 
 
 def _resolve_version() -> str:
-    """优先读取安装包元数据，失败时回退到 pyproject.toml。"""
+    """优先读取源码 pyproject，失败时回退到安装包元数据。"""
+    pyproject_version = _read_version_from_pyproject()
+    if pyproject_version != "0.0.0-dev":
+        return pyproject_version
+
     try:
         return version("transcoder-cluster")
     except PackageNotFoundError:
-        return _read_version_from_pyproject()
+        return "0.0.0-dev"
     except Exception:
-        return _read_version_from_pyproject()
+        return "0.0.0-dev"
 
 
 __version__ = _resolve_version()

@@ -862,8 +862,9 @@ class ControllerApp:
 
 
 def main():
+    version_tag = __version__ if str(__version__).startswith("v") else f"v{__version__}"
     root = ttk.Window(
-        title="Transcoder Cluster - 控制端",
+        title=f"Transcoder Cluster {version_tag} - 主控端",
         themename="cosmo",
         size=(1700, 1250),
     )
