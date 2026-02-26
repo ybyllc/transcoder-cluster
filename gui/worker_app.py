@@ -31,12 +31,6 @@ class WorkerGuiLogHandler(logging.Handler):
     def __init__(self, app: "WorkerApp"):
         super().__init__(level=logging.INFO)
         self.app = app
-        self.setFormatter(
-            logging.Formatter(
-                fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
 
     def emit(self, record: logging.LogRecord) -> None:
         if record.levelno < logging.INFO:
@@ -44,8 +38,7 @@ class WorkerGuiLogHandler(logging.Handler):
         if not str(record.name).startswith("transcoder_cluster"):
             return
         try:
-            message = self.format(record)
-            self.app.root.after(0, self.app._append_log_line, message)
+            self.app.root.after(0, self.app._append_runtime_log, record)
         except Exception:
             pass
 
@@ -63,6 +56,7 @@ class WorkerApp:
         self.heartbeat: HeartbeatService = None
         self.responder: DiscoveryResponder = None
         self._runtime_log_handler = None
+        self._progress_log_index = None
 
         # 创建界面
         self._create_ui()
@@ -196,7 +190,7 @@ class WorkerApp:
     def _log(self, message: str):
         """添加日志"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self._append_log_line(f"[{timestamp}] {message}")
+        self._append_log_line(f"[{timestamp}]  {message}")
 
     def _append_log_line(self, line: str):
         """向日志框追加一行文本。"""
@@ -209,10 +203,49 @@ class WorkerApp:
         self.log_text.see(END)
         self.log_text.text.config(state=DISABLED)
 
+    def _append_runtime_log(self, record: logging.LogRecord):
+        """将运行日志按用户可读格式写入 GUI。"""
+        if not getattr(self, "log_text", None):
+            return
+        if not self.log_text.text.winfo_exists():
+            return
+
+        message = record.getMessage().strip()
+        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        line = f"[{timestamp}]  {message}"
+        is_progress = message.startswith("转码进度:")
+
+        text_widget = self.log_text.text
+        text_widget.config(state=NORMAL)
+        if is_progress:
+            if self._progress_log_index:
+                try:
+                    text_widget.delete(self._progress_log_index, f"{self._progress_log_index} lineend+1c")
+                    text_widget.insert(self._progress_log_index, f"{line}\n")
+                except Exception:
+                    text_widget.insert(END, f"{line}\n")
+                    self._progress_log_index = text_widget.index("end-2l linestart")
+            else:
+                text_widget.insert(END, f"{line}\n")
+                self._progress_log_index = text_widget.index("end-2l linestart")
+            text_widget.see(self._progress_log_index)
+        else:
+            text_widget.insert(END, f"{line}\n")
+            text_widget.see(END)
+            if self._progress_log_index and (
+                message.startswith("转码完成")
+                or message.startswith("转码失败")
+                or message.startswith("收到停止请求")
+                or message.startswith("FFmpeg 进程已终止")
+            ):
+                self._progress_log_index = None
+        text_widget.config(state=DISABLED)
+
     def _install_runtime_log_bridge(self):
         """安装日志桥接，GUI 中显示与 CLI 一致的 INFO 日志。"""
         if self._runtime_log_handler is not None:
             return
+        self._progress_log_index = None
         target_logger = logging.getLogger("transcoder_cluster")
         if target_logger.level > logging.INFO:
             target_logger.setLevel(logging.INFO)
@@ -223,6 +256,7 @@ class WorkerApp:
     def _remove_runtime_log_bridge(self):
         """卸载日志桥接，避免重复输出。"""
         if self._runtime_log_handler is None:
+            self._progress_log_index = None
             return
         target_logger = logging.getLogger("transcoder_cluster")
         try:
@@ -230,6 +264,7 @@ class WorkerApp:
             self._runtime_log_handler.close()
         finally:
             self._runtime_log_handler = None
+            self._progress_log_index = None
     
     def _update_status_style(self, status: str):
         """根据状态更新样式"""
@@ -312,6 +347,7 @@ class WorkerApp:
     def _on_stop_complete(self):
         """停止完成后的 UI 更新"""
         self._remove_runtime_log_bridge()
+        self._progress_log_index = None
         # 重置启动时间
         self.start_time = None
         self.status_var.set("🔴 已停止")

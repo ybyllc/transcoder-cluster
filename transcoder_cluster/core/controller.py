@@ -252,6 +252,7 @@ class Controller:
 
             # 构建请求
             payload = {
+                "task_id": task.id,
                 "video_file": {
                     "name": os.path.basename(task.input_file),
                     "data": base64.b64encode(video_data).decode("utf-8"),
@@ -468,7 +469,7 @@ class Controller:
                     task.progress = int(status.get("progress", 0))
                     if on_task_update:
                         on_task_update(task)
-                poll_stop.wait(0.5)
+                poll_stop.wait(1.0)
 
         poll_thread = threading.Thread(target=poll_progress, daemon=True)
         poll_thread.start()
