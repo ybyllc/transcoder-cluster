@@ -62,6 +62,7 @@ class ControllerApp:
         self.node_capabilities: Dict[str, Dict[str, Any]] = {}
         self.node_runtime_status: Dict[str, Dict[str, Any]] = {}
         self._capabilities_fetching: set = set()
+        self.active_worker_ips: List[str] = []
 
         self.running = False
         self.dispatch_thread: Optional[threading.Thread] = None
@@ -338,6 +339,17 @@ class ControllerApp:
             padding=(12, 9),
         )
         self.start_btn.pack(fill=X)
+
+    def _set_run_button_mode(self, running: bool, stopping: bool = False):
+        """切换开始/停止按钮状态。"""
+        if stopping:
+            self.start_btn.config(text="停止中...", bootstyle="danger", state=DISABLED, command=self._stop_transcode)
+            return
+
+        if running:
+            self.start_btn.config(text="停止转码", bootstyle="danger", state=NORMAL, command=self._stop_transcode)
+        else:
+            self.start_btn.config(text="开始转码", bootstyle="success", state=NORMAL, command=self._start_transcode)
 
     def _create_right_file_panel(self):
         files_frame = ttk.Labelframe(self.right_frame, text="文件列表", padding=8)
@@ -863,7 +875,8 @@ class ControllerApp:
 
         self.running = True
         self.dispatch_stop_event.clear()
-        self.start_btn.config(state=DISABLED)
+        self.active_worker_ips = list(dict.fromkeys(target_workers))
+        self._set_run_button_mode(running=True)
 
         self._refresh_file_tree()
         self._refresh_overall_progress()
@@ -891,6 +904,37 @@ class ControllerApp:
         self.dispatch_thread = threading.Thread(target=dispatch_runner, daemon=True)
         self.dispatch_thread.start()
 
+    def _collect_active_worker_ips(self) -> List[str]:
+        workers = list(self.active_worker_ips)
+        for task in self.current_tasks:
+            if task.worker and str(task.status or "").lower() in ("uploading", "processing"):
+                workers.append(task.worker)
+        deduped = []
+        seen = set()
+        for ip in workers:
+            if ip and ip not in seen:
+                seen.add(ip)
+                deduped.append(ip)
+        return deduped
+
+    def _stop_transcode(self):
+        if not self.running:
+            return
+        confirm = Messagebox.yesno("确认停止当前转码任务吗？", "确认")
+        if not self._is_confirmed_yes(confirm):
+            return
+
+        self.dispatch_stop_event.set()
+        self._set_run_button_mode(running=True, stopping=True)
+        worker_ips = self._collect_active_worker_ips()
+
+        def stop_runner():
+            for worker_ip in worker_ips:
+                if not self.controller.stop_worker_task(worker_ip):
+                    logger.warning("停止节点任务失败: %s", worker_ip)
+
+        threading.Thread(target=stop_runner, daemon=True).start()
+
     def _on_task_runtime_update(self, _task: Task):
         self._refresh_file_tree()
         self._refresh_overall_progress()
@@ -907,7 +951,8 @@ class ControllerApp:
 
     def _on_dispatch_finished(self, result: Dict[str, Any]):
         self.running = False
-        self.start_btn.config(state=NORMAL)
+        self.active_worker_ips = []
+        self._set_run_button_mode(running=False)
         self._refresh_file_tree()
         self._refresh_overall_progress()
 
@@ -935,7 +980,8 @@ class ControllerApp:
 
     def _on_dispatch_error(self, error_message: str):
         self.running = False
-        self.start_btn.config(state=NORMAL)
+        self.active_worker_ips = []
+        self._set_run_button_mode(running=False)
         Messagebox.show_error(f"任务执行异常: {error_message}", "错误")
 
     def _delete_completed_original_files(self) -> Tuple[int, List[str]]:

@@ -324,6 +324,19 @@ class Controller:
             logger.error(f"获取 Worker 状态失败: {e}")
             return {"status": "unknown", "error": str(e)}
 
+    def stop_worker_task(self, worker_ip: str) -> bool:
+        """请求 Worker 停止当前转码任务。"""
+        try:
+            r = requests.post(f"http://{worker_ip}:9000/stop", timeout=5)
+            if r.status_code != 200:
+                logger.warning(f"请求停止 Worker 失败: {worker_ip} status={r.status_code}")
+                return False
+            result = r.json()
+            return result.get("status") == "success"
+        except Exception as e:
+            logger.error(f"请求停止 Worker 任务失败: {worker_ip} | {e}")
+            return False
+
     def get_worker_capabilities(self, worker_ip: str) -> Dict[str, Any]:
         """获取 Worker 能力信息。"""
         try:

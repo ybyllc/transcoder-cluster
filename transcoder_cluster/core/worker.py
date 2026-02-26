@@ -110,6 +110,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
         """处理 POST 请求"""
         if self.path == "/task":
             self._handle_task()
+        elif self.path == "/stop":
+            self._handle_stop()
         else:
             self.send_error(404, "Not Found")
 
@@ -156,6 +158,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
         transcode_success = False
         task_label = None
         try:
+            # 新任务开始前清理历史停止标志。
+            WorkerHandler._stop_requested = False
             # 更新状态为接收中
             WorkerHandler.status = {
                 "status": "receiving",
@@ -260,9 +264,6 @@ class WorkerHandler(BaseHTTPRequestHandler):
             "task_id": task_label,
             "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        
-        # 重置停止标志
-        WorkerHandler._stop_requested = False
 
         cmd = [config.ffmpeg_path, "-y", "-i", input_path] + ffmpeg_args + [output_path]
         logger.info(f"开始转码: {' '.join(cmd)}")
@@ -337,6 +338,16 @@ class WorkerHandler(BaseHTTPRequestHandler):
 
             proc.wait()
             WorkerHandler._ffmpeg_proc = None
+
+            if WorkerHandler._stop_requested:
+                WorkerHandler.status = {
+                    "status": "stopped",
+                    "current_task": None,
+                    "progress": 0,
+                    "task_id": task_label,
+                    "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                return {"status": "stopped", "error": "转码被用户中断"}
 
             if proc.returncode == 0:
                 WorkerHandler.status = {
@@ -438,6 +449,25 @@ class WorkerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(WorkerHandler.status).encode())
+
+    def _handle_stop(self) -> None:
+        """处理停止当前任务请求。"""
+        WorkerHandler._stop_requested = True
+        proc = WorkerHandler._ffmpeg_proc
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception as error:
+                logger.debug(f"终止 FFmpeg 进程请求失败: {error}")
+
+        current_status = str(WorkerHandler.status.get("status", "")).lower()
+        if current_status in ("receiving", "uploading", "processing"):
+            WorkerHandler.status["status"] = "stopped"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "success"}).encode())
 
     @classmethod
     def _build_capabilities(cls) -> Dict[str, Any]:
