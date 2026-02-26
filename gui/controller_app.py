@@ -146,7 +146,9 @@ class ControllerApp:
         cfg_frame = ttk.Labelframe(self.left_frame, text="转码配置", padding=10)
         cfg_frame.pack(fill=X, pady=(0, 8))
 
-        ttk.Label(cfg_frame, text="预设:").grid(row=0, column=0, sticky=W, pady=3)
+        preset_label = ttk.Label(cfg_frame, text="预设:")
+        preset_label.grid(row=0, column=0, sticky=W, pady=3)
+        ToolTip(preset_label, text="选择一组常用转码参数组合，适合快速开始。")
         self.preset_var = ttk.StringVar()
         self.preset_combo = ttk.Combobox(cfg_frame, textvariable=self.preset_var, values=list_presets(), state="readonly", width=26)
         self.preset_combo.grid(row=0, column=1, sticky=W, pady=3)
@@ -155,17 +157,26 @@ class ControllerApp:
             self.preset_combo.set(preset_names[0])
         self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_changed)
 
-        ttk.Label(cfg_frame, text="编码器:").grid(row=1, column=0, sticky=W, pady=3)
+        codec_label = ttk.Label(cfg_frame, text="编码器:")
+        codec_label.grid(row=1, column=0, sticky=W, pady=3)
+        ToolTip(
+            codec_label,
+            text="x265：体积更小，时间更长（默认）。\nx264：体积正常，时间快。",
+        )
         self.codec_var = ttk.StringVar(value="libx265")
         self.codec_combo = ttk.Combobox(cfg_frame, textvariable=self.codec_var, values=CODEC_OPTIONS, state="readonly", width=26)
         self.codec_combo.grid(row=1, column=1, sticky=W, pady=3)
         self.codec_combo.bind("<<ComboboxSelected>>", self._on_codec_changed)
 
-        ttk.Label(cfg_frame, text="CRF/CQ:").grid(row=2, column=0, sticky=W, pady=3)
+        crf_label = ttk.Label(cfg_frame, text="CRF/CQ:")
+        crf_label.grid(row=2, column=0, sticky=W, pady=3)
+        ToolTip(crf_label, text="值越大体积越小、画质越低。常用范围 20-32。")
         self.crf_var = ttk.StringVar(value="28")
         ttk.Entry(cfg_frame, textvariable=self.crf_var, width=10).grid(row=2, column=1, sticky=W, pady=3)
 
-        ttk.Label(cfg_frame, text="最大分辨率:").grid(row=3, column=0, sticky=W, pady=3)
+        resolution_label = ttk.Label(cfg_frame, text="最大分辨率:")
+        resolution_label.grid(row=3, column=0, sticky=W, pady=3)
+        ToolTip(resolution_label, text="超过该宽高时会按比例缩小，不拉伸。")
         size_row = ttk.Frame(cfg_frame)
         size_row.grid(row=3, column=1, sticky=W, pady=3)
 
@@ -215,7 +226,7 @@ class ControllerApp:
 
         ttk.Button(
             single_row,
-            text="刷新",
+            text="刷新节点",
             width=6,
             bootstyle="secondary",
             command=self._broadcast_discovery,
@@ -240,7 +251,7 @@ class ControllerApp:
         self.start_btn.pack(fill=X)
 
     def _create_right_file_panel(self):
-        files_frame = ttk.Labelframe(self.right_frame, text="任务列表", padding=8)
+        files_frame = ttk.Labelframe(self.right_frame, text="文件列表", padding=8)
         files_frame.pack(fill=BOTH, expand=YES)
 
         columns = ("file", "source", "status", "progress", "worker", "output")
@@ -299,7 +310,7 @@ class ControllerApp:
         ttk.Label(nodes_header, text="节点状态").pack(side=LEFT)
         ttk.Button(
             nodes_header,
-            text="刷新",
+            text="刷新节点",
             bootstyle="secondary",
             command=self._refresh_nodes_now,
             padding=BTN_PADDING,
