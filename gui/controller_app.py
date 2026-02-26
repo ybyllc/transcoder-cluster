@@ -32,6 +32,7 @@ logger = get_logger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
 CODEC_OPTIONS = ["libx265", "libx264", "hevc_nvenc", "h264_nvenc"]
+BTN_PADDING = (8, 6)
 
 
 class ControllerApp:
@@ -110,33 +111,29 @@ class ControllerApp:
         self._bind_left_scroll_widgets(self.left_frame)
 
     def _create_left_flow_panel(self):
-        sys_frame = ttk.Labelframe(self.left_frame, text="步骤 1: 环境检查", padding=10)
-        sys_frame.pack(fill=X, pady=(0, 8))
-
-        ttk.Label(sys_frame, text=f"软件版本: {__version__}", font=("Arial", 10)).pack(anchor=W)
-
+        ffmpeg_frame = ttk.Frame(self.left_frame, padding=(0, 0, 0, 8))
+        ffmpeg_frame.pack(fill=X)
         self.ffmpeg_version_var = ttk.StringVar(value="FFmpeg: 检测中...")
-        ttk.Label(sys_frame, textvariable=self.ffmpeg_version_var, font=("Arial", 10)).pack(anchor=W, pady=(6, 0))
-
-        ffmpeg_btn_frame = ttk.Frame(sys_frame)
-        ffmpeg_btn_frame.pack(fill=X, pady=(8, 0))
+        ttk.Label(ffmpeg_frame, textvariable=self.ffmpeg_version_var, font=("Arial", 10)).pack(side=LEFT)
 
         self.install_ffmpeg_btn = ttk.Button(
-            ffmpeg_btn_frame,
+            ffmpeg_frame,
             text="安装 FFmpeg",
             bootstyle="warning",
             command=self._install_ffmpeg,
+            padding=BTN_PADDING,
         )
+        self.install_ffmpeg_btn.pack(side=RIGHT)
         ToolTip(self.install_ffmpeg_btn, text="检测不到 FFmpeg 时可自动下载安装")
 
-        files_frame = ttk.Labelframe(self.left_frame, text="步骤 2: 添加文件", padding=10)
+        files_frame = ttk.Labelframe(self.left_frame, text="添加文件", padding=10)
         files_frame.pack(fill=X, pady=(0, 8))
 
-        ttk.Button(files_frame, text="添加文件", bootstyle="primary", command=self._add_files).pack(side=LEFT)
-        ttk.Button(files_frame, text="添加文件夹", bootstyle="info", command=self._add_folder).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(files_frame, text="清空列表", bootstyle="secondary", command=self._clear_files).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(files_frame, text="添加文件", bootstyle="primary", command=self._add_files, padding=BTN_PADDING).pack(side=LEFT)
+        ttk.Button(files_frame, text="添加文件夹", bootstyle="info", command=self._add_folder, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(files_frame, text="清空列表", bootstyle="secondary", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
 
-        cfg_frame = ttk.Labelframe(self.left_frame, text="步骤 3: 转码配置", padding=10)
+        cfg_frame = ttk.Labelframe(self.left_frame, text="转码配置", padding=10)
         cfg_frame.pack(fill=X, pady=(0, 8))
 
         ttk.Label(cfg_frame, text="预设:").grid(row=0, column=0, sticky=W, pady=3)
@@ -177,7 +174,7 @@ class ControllerApp:
             bootstyle="info",
         ).grid(row=4, column=0, columnspan=2, sticky=W, pady=(6, 0))
 
-        dispatch_frame = ttk.Labelframe(self.left_frame, text="步骤 4: 派发模式", padding=10)
+        dispatch_frame = ttk.Labelframe(self.left_frame, text="派发模式", padding=10)
         dispatch_frame.pack(fill=X, pady=(0, 8))
 
         self.dispatch_mode_var = ttk.StringVar(value="auto")
@@ -192,14 +189,21 @@ class ControllerApp:
         self.node_combo = ttk.Combobox(single_row, textvariable=self.node_var, state="readonly", width=18)
         self.node_combo.pack(side=LEFT, padx=(8, 0))
 
-        ttk.Button(single_row, text="刷新", width=6, bootstyle="secondary", command=self._broadcast_discovery).pack(side=LEFT, padx=(6, 0))
+        ttk.Button(
+            single_row,
+            text="刷新",
+            width=6,
+            bootstyle="secondary",
+            command=self._broadcast_discovery,
+            padding=BTN_PADDING,
+        ).pack(side=LEFT, padx=(6, 0))
 
         self._on_preset_changed()
         self._on_dispatch_mode_changed()
 
     def _create_left_action_panel(self):
         """左侧固定底部操作区，始终可见。"""
-        run_frame = ttk.Labelframe(self.left_action_frame, text="步骤 5: 开始转码", padding=10)
+        run_frame = ttk.Labelframe(self.left_action_frame, text="开始转码", padding=10)
         run_frame.pack(fill=X)
 
         self.start_btn = ttk.Button(
@@ -207,7 +211,7 @@ class ControllerApp:
             text="开始转码",
             bootstyle="success",
             command=self._start_transcode,
-            padding=(8, 10),
+            padding=(10, 8),
         )
         self.start_btn.pack(fill=X)
 
@@ -769,7 +773,7 @@ class ControllerApp:
         self.ffmpeg_version_var.set("FFmpeg: 未安装")
         self.install_ffmpeg_btn.config(bootstyle="warning")
         if not self.install_ffmpeg_btn.winfo_manager():
-            self.install_ffmpeg_btn.pack(side=LEFT)
+            self.install_ffmpeg_btn.pack(side=RIGHT)
 
     def _install_ffmpeg(self):
         self.install_ffmpeg_btn.config(state=DISABLED)
