@@ -535,26 +535,49 @@ class ControllerApp:
                     task.status = "completed"
                     task.progress = 100
                     self._log(f"任务 {task.id} 完成")
+                    
                     # 下载结果
                     output_file = result.get("output_file")
+                    download_success = False
+                    
                     if output_file:
-                        self.controller.download_result(
+                        download_success = self.controller.download_result(
                             worker_ip,
                             os.path.basename(output_file),
                             output_path
                         )
                     
-                    # 删除原文件（如果选择了该选项）
-                    if self.delete_original_var.get():
-                        try:
-                            os.remove(input_path)
-                            self._log(f"已删除原文件: {input_path}")
-                        except Exception as e:
-                            self._log(f"删除原文件失败: {e}")
-                    
-                    # 发送系统通知
-                    send_system_notification("转码完成", f"任务 {task.id} 已完成\n输出: {os.path.basename(output_path)}")
-                    self.root.after(0, lambda: messagebox.showinfo("成功", f"转码完成: {output_path}"))
+                    # 验证输出文件是否存在且大小大于0
+                    if download_success and os.path.exists(output_path):
+                        file_size = os.path.getsize(output_path)
+                        if file_size > 0:
+                            self._log(f"输出文件验证通过: {output_path} ({file_size / 1024 / 1024:.2f} MB)")
+                            
+                            # 删除原文件（如果选择了该选项）
+                            if self.delete_original_var.get():
+                                try:
+                                    os.remove(input_path)
+                                    self._log(f"已删除原文件: {input_path}")
+                                except Exception as e:
+                                    self._log(f"删除原文件失败: {e}")
+                            
+                            # 发送系统通知
+                            send_system_notification("转码完成", f"任务 {task.id} 已完成\n输出: {os.path.basename(output_path)}")
+                            self.root.after(0, lambda: messagebox.showinfo("成功", f"转码完成: {output_path}"))
+                        else:
+                            # 文件大小为0
+                            task.status = "failed"
+                            task.error = "输出文件大小为0，转码可能失败"
+                            self._log(f"任务 {task.id} 失败: 输出文件大小为0")
+                            send_system_notification("转码失败", f"任务 {task.id} 输出文件大小为0")
+                            self.root.after(0, lambda: messagebox.showerror("失败", "转码失败：输出文件大小为0"))
+                    else:
+                        # 下载失败或文件不存在
+                        task.status = "failed"
+                        task.error = "输出文件下载失败或不存在"
+                        self._log(f"任务 {task.id} 失败: 输出文件下载失败")
+                        send_system_notification("转码失败", f"任务 {task.id} 输出文件下载失败")
+                        self.root.after(0, lambda: messagebox.showerror("失败", "转码失败：输出文件下载失败"))
                 elif result.get("status") == "stopped":
                     task.status = "stopped"
                     task.error = "转码被中断"
