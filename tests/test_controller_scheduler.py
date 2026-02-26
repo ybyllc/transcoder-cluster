@@ -13,12 +13,33 @@ class TestControllerScheduler:
         input_file = tmp_path / "sample.mp4"
         input_file.write_bytes(b"dummy")
 
-        first_output = tmp_path / "sample_output.mp4"
+        first_output = tmp_path / "sample_transcoded.mp4"
         first_output.write_bytes(b"existing")
 
         controller = Controller()
         output = controller.build_output_path(str(input_file))
-        assert output.endswith("sample_output_2.mp4")
+        assert output.endswith("sample_transcoded_2.mp4")
+
+    def test_validate_output_file(self, tmp_path: Path):
+        """输出文件校验：不存在/空文件/有效文件。"""
+        controller = Controller()
+
+        missing_path = tmp_path / "missing.mp4"
+        ok, message = controller._validate_output_file(str(missing_path))
+        assert ok is False
+        assert "不存在" in message
+
+        empty_path = tmp_path / "empty.mp4"
+        empty_path.write_bytes(b"")
+        ok, message = controller._validate_output_file(str(empty_path))
+        assert ok is False
+        assert "大小为 0" in message
+
+        valid_path = tmp_path / "valid.mp4"
+        valid_path.write_bytes(b"not-empty")
+        ok, message = controller._validate_output_file(str(valid_path))
+        assert ok is True
+        assert message == ""
 
     def test_dispatch_retry_once_then_success(self):
         """失败后应按 max_attempts 重试并成功。"""

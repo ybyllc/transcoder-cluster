@@ -474,16 +474,37 @@ class Controller:
                 return False, result.get("error", "Worker failed")
 
             output_file = result.get("output_file")
-            if output_file:
-                ok = self.download_result(worker_ip, os.path.basename(output_file), task.output_file)
-                if not ok:
-                    return False, "下载转码结果失败"
+            if not output_file:
+                return False, "Worker 未返回输出文件路径"
+
+            ok = self.download_result(worker_ip, os.path.basename(output_file), task.output_file)
+            if not ok:
+                return False, "下载转码结果失败"
+
+            valid, error_message = self._validate_output_file(task.output_file)
+            if not valid:
+                return False, error_message
             return True, None
         except Exception as e:
             return False, str(e)
         finally:
             poll_stop.set()
             poll_thread.join(timeout=1)
+
+    def _validate_output_file(self, output_path: str) -> Tuple[bool, str]:
+        """校验输出文件存在且大小有效。"""
+        if not os.path.exists(output_path):
+            return False, "输出文件不存在"
+
+        try:
+            file_size = os.path.getsize(output_path)
+        except OSError as error:
+            return False, f"读取输出文件失败: {error}"
+
+        if file_size <= 0:
+            return False, "输出文件大小为 0"
+
+        return True, ""
 
 
 def main():
