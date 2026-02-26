@@ -13,7 +13,7 @@ import time
 import tkinter as tk
 import zipfile
 from tkinter import filedialog
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import ttkbootstrap as ttk
@@ -180,6 +180,20 @@ class ControllerApp:
             textvariable=self.codec_support_var,
             bootstyle="info",
         ).grid(row=4, column=0, columnspan=2, sticky=W, pady=(6, 0))
+
+        delete_row = ttk.Frame(cfg_frame)
+        delete_row.grid(row=5, column=0, columnspan=2, sticky=W, pady=(6, 0))
+        self.delete_original_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            delete_row,
+            text="成功后删除原文件",
+            variable=self.delete_original_var,
+        ).pack(side=LEFT)
+        ttk.Label(
+            delete_row,
+            text="谨慎：删除后不可恢复",
+            bootstyle="danger",
+        ).pack(side=LEFT, padx=(8, 0))
 
         dispatch_frame = ttk.Labelframe(self.left_frame, text="派发模式", padding=10)
         dispatch_frame.pack(fill=X, pady=(0, 8))
@@ -651,12 +665,60 @@ class ControllerApp:
         total = result.get("total", 0)
         completed = result.get("completed", 0)
         failed = result.get("failed", 0)
-        Messagebox.show_info(f"批量转码完成\n总计: {total}\n成功: {completed}\n失败: {failed}", "完成")
+        deleted_count = 0
+        delete_errors: List[str] = []
+        if self.delete_original_var.get():
+            deleted_count, delete_errors = self._delete_completed_original_files()
+
+        summary_lines = [
+            "批量转码完成",
+            f"总计: {total}",
+            f"成功: {completed}",
+            f"失败: {failed}",
+        ]
+        if self.delete_original_var.get():
+            summary_lines.append(f"已删除原文件: {deleted_count}")
+            if delete_errors:
+                summary_lines.append(f"删除失败: {len(delete_errors)}")
+                logger.warning("原文件删除失败: %s", " | ".join(delete_errors))
+
+        Messagebox.show_info("\n".join(summary_lines), "完成")
 
     def _on_dispatch_error(self, error_message: str):
         self.running = False
         self.start_btn.config(state=NORMAL)
         Messagebox.show_error(f"任务执行异常: {error_message}", "错误")
+
+    def _delete_completed_original_files(self) -> Tuple[int, List[str]]:
+        deleted_paths: List[str] = []
+        delete_errors: List[str] = []
+
+        for task in self.current_tasks:
+            if task.status != "completed":
+                continue
+
+            input_path = os.path.abspath(task.input_file)
+            output_path = os.path.abspath(task.output_file)
+            if input_path == output_path:
+                continue
+            if not os.path.exists(input_path):
+                continue
+
+            try:
+                os.remove(input_path)
+                deleted_paths.append(input_path)
+            except Exception as error:
+                delete_errors.append(f"{os.path.basename(input_path)}: {error}")
+
+        if deleted_paths:
+            deleted_set = set(deleted_paths)
+            self.selected_files = [path for path in self.selected_files if os.path.abspath(path) not in deleted_set]
+            for path in deleted_set:
+                self.file_info_map.pop(path, None)
+            self._refresh_file_tree()
+            self._refresh_overall_progress()
+
+        return len(deleted_paths), delete_errors
 
     def _get_discovered_worker_ips(self) -> List[str]:
         ips = [info.get("ip") for info in self.discovery.discovered_nodes.values() if info.get("ip")]
