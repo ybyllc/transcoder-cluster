@@ -247,8 +247,13 @@ class WorkerApp:
                 Messagebox.show_warning("系统托盘依赖缺失（pystray/Pillow），将退化为任务栏最小化。", "提示")
             return False
 
+        # Windows 下 default=True 的菜单项可通过双击托盘图标触发。
         menu = self._pystray.Menu(
-            self._pystray.MenuItem("打开窗口", lambda _icon, _item: self.root.after(0, self._restore_from_tray)),
+            self._pystray.MenuItem(
+                "打开窗口",
+                lambda _icon, _item: self.root.after(0, self._restore_from_tray),
+                default=True,
+            ),
             self._pystray.MenuItem("退出子节点", lambda _icon, _item: self.root.after(0, self._exit_application)),
         )
         self._tray_icon = self._pystray.Icon(
