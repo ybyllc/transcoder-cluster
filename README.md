@@ -534,9 +534,11 @@ PRESETS["my_custom_preset"] = TranscodePreset(
 - ✅ Worker 节点发现、任务提交与结果下载能力
 
 ### 计划功能
+- [ ] 支持linux等多平台，让树莓派等端侧设备加入运算
+- [ ] 用更轻量更现代化的界面
 - [ ] 异步传输优化
 - [ ] 任务队列管理
-- [ ] Web 管理界面
+- [ ] Web 管理界面（CLI➕web管理的方案）
 - [ ] Docker 部署支持
 - [ ] 认证与加密
 
