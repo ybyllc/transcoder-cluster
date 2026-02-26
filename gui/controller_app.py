@@ -32,6 +32,12 @@ logger = get_logger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
 CODEC_OPTIONS = ["libx265", "libx264", "hevc_nvenc", "h264_nvenc"]
+CODEC_DEFAULT_QUALITY_HINTS = {
+    "libx265": "默认 28（不加 -crf）",
+    "libx264": "默认 23（不加 -crf）",
+    "hevc_nvenc": "默认自动（不加 -cq）",
+    "h264_nvenc": "默认自动（不加 -cq）",
+}
 BTN_PADDING = (10, 7)
 
 
@@ -45,6 +51,7 @@ class ControllerApp:
 
         self.selected_files: List[str] = []
         self.file_info_map: Dict[str, str] = {}
+        self.file_tree_item_map: Dict[str, str] = {}
         self.current_tasks: List[Task] = []
         self.node_capabilities: Dict[str, Dict[str, Any]] = {}
         self.node_runtime_status: Dict[str, Dict[str, Any]] = {}
@@ -70,26 +77,35 @@ class ControllerApp:
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=BOTH, expand=YES)
 
-        content_frame = ttk.Frame(main_frame)
-        content_frame.pack(fill=BOTH, expand=YES)
+        self.content_pane = ttk.Panedwindow(main_frame, orient=HORIZONTAL)
+        self.content_pane.pack(fill=BOTH, expand=YES)
 
-        self.left_panel_frame = ttk.Frame(content_frame, width=460)
-        self.left_panel_frame.pack(side=LEFT, fill=Y, padx=(0, 10))
+        self.left_panel_frame = ttk.Frame(self.content_pane, width=470)
         self.left_panel_frame.pack_propagate(False)
 
         self.left_scroll_container = ttk.Frame(self.left_panel_frame)
         self.left_scroll_container.pack(side=TOP, fill=BOTH, expand=YES)
 
         self.left_canvas = tk.Canvas(self.left_scroll_container, highlightthickness=0)
-        self.left_scrollbar = ttk.Scrollbar(
+        self.left_v_scrollbar = ttk.Scrollbar(
             self.left_scroll_container,
             orient=VERTICAL,
             command=self.left_canvas.yview,
         )
-        self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
-        self.left_scrollbar.pack(side=RIGHT, fill=Y)
+        self.left_h_scrollbar = ttk.Scrollbar(
+            self.left_scroll_container,
+            orient=HORIZONTAL,
+            command=self.left_canvas.xview,
+        )
+        self.left_canvas.configure(
+            yscrollcommand=self.left_v_scrollbar.set,
+            xscrollcommand=self.left_h_scrollbar.set,
+        )
+        self.left_v_scrollbar.pack(side=RIGHT, fill=Y)
+        self.left_h_scrollbar.pack(side=BOTTOM, fill=X)
         self.left_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
-        self._left_scroll_enabled = False
+        self._left_v_scroll_enabled = False
+        self._left_h_scroll_enabled = False
 
         self.left_frame = ttk.Frame(self.left_canvas)
         self.left_canvas_window = self.left_canvas.create_window((0, 0), window=self.left_frame, anchor="nw")
@@ -99,8 +115,14 @@ class ControllerApp:
         self.left_action_frame = ttk.Frame(self.left_panel_frame, padding=(0, 8, 0, 0))
         self.left_action_frame.pack(side=BOTTOM, fill=X)
 
-        self.right_frame = ttk.Frame(content_frame)
-        self.right_frame.pack(side=LEFT, fill=BOTH, expand=YES)
+        self.right_frame = ttk.Frame(self.content_pane)
+        try:
+            self.content_pane.add(self.left_panel_frame, weight=2)
+            self.content_pane.add(self.right_frame, weight=3)
+        except tk.TclError:
+            self.content_pane.add(self.left_panel_frame)
+            self.content_pane.add(self.right_frame)
+        self.root.after(0, self._set_initial_pane_width)
 
         self.bottom_frame = ttk.Frame(main_frame)
         self.bottom_frame.pack(fill=X, pady=(10, 0))
@@ -110,6 +132,13 @@ class ControllerApp:
         self._create_right_file_panel()
         self._create_bottom_status_panel()
         self._bind_left_scroll_widgets(self.left_frame)
+
+    def _set_initial_pane_width(self):
+        """设置左栏初始宽度，用户可拖拽调整。"""
+        try:
+            self.content_pane.sashpos(0, 470)
+        except Exception:
+            pass
 
     def _create_left_flow_panel(self):
         ffmpeg_frame = ttk.Frame(self.left_frame, padding=(0, 0, 0, 8))
@@ -130,19 +159,18 @@ class ControllerApp:
         files_frame = ttk.Labelframe(self.left_frame, text="添加文件", padding=10)
         files_frame.pack(fill=X, pady=(0, 8))
 
-        ttk.Button(files_frame, text="添加文件", bootstyle="primary", command=self._add_files, padding=BTN_PADDING).pack(side=LEFT)
-        ttk.Button(files_frame, text="添加文件夹", bootstyle="info", command=self._add_folder, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(files_frame, text="清空列表", bootstyle="danger", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
+        files_button_row = ttk.Frame(files_frame)
+        files_button_row.pack(fill=X)
+        ttk.Button(files_button_row, text="添加文件", bootstyle="primary", command=self._add_files, padding=BTN_PADDING).pack(side=LEFT)
+        ttk.Button(files_button_row, text="添加文件夹", bootstyle="info", command=self._add_folder, padding=BTN_PADDING).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(files_button_row, text="清空列表", bootstyle="danger", command=self._clear_files, padding=BTN_PADDING).pack(side=LEFT, padx=(12, 0))
 
-        suffix_label_row = ttk.Frame(files_frame)
-        suffix_label_row.pack(fill=X, pady=(8, 0))
-        ttk.Label(suffix_label_row, text="输出文件后缀：").pack(anchor=W)
-
-        suffix_input_row = ttk.Frame(files_frame)
-        suffix_input_row.pack(fill=X, pady=(4, 0))
+        suffix_row = ttk.Frame(files_frame)
+        suffix_row.pack(fill=X, pady=(8, 0))
+        ttk.Label(suffix_row, text="输出文件后缀：").pack(side=LEFT)
         self.output_suffix_var = ttk.StringVar(value="_transcoded")
-        ttk.Entry(suffix_input_row, textvariable=self.output_suffix_var, width=18).pack(side=LEFT)
-        ttk.Label(suffix_input_row, text="默认: _transcoded", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
+        ttk.Entry(suffix_row, textvariable=self.output_suffix_var, width=18).pack(side=LEFT, padx=(6, 0))
+        ttk.Label(suffix_row, text="默认: _transcoded", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
 
         cfg_frame = ttk.Labelframe(self.left_frame, text="转码配置", padding=10)
         cfg_frame.pack(fill=X, pady=(0, 8))
@@ -171,9 +199,13 @@ class ControllerApp:
 
         crf_label = ttk.Label(cfg_frame, text="CRF/CQ:")
         crf_label.grid(row=2, column=0, sticky=W, pady=3)
-        ToolTip(crf_label, text="值越大体积越小、画质越低。常用范围 20-32。")
+        ToolTip(crf_label, text="值越小，画质越好，体积越大。留空时使用编码器默认值。")
+        crf_row = ttk.Frame(cfg_frame)
+        crf_row.grid(row=2, column=1, sticky=W, pady=3)
         self.crf_var = ttk.StringVar(value="28")
-        ttk.Entry(cfg_frame, textvariable=self.crf_var, width=10).grid(row=2, column=1, sticky=W, pady=3)
+        ttk.Entry(crf_row, textvariable=self.crf_var, width=10).pack(side=LEFT)
+        self.crf_default_hint_var = ttk.StringVar(value="")
+        ttk.Label(crf_row, textvariable=self.crf_default_hint_var, bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
 
         resolution_label = ttk.Label(cfg_frame, text="最大分辨率:")
         resolution_label.grid(row=3, column=0, sticky=W, pady=3)
@@ -234,6 +266,7 @@ class ControllerApp:
             padding=BTN_PADDING,
         ).pack(side=LEFT, padx=(6, 0))
 
+        self._update_crf_default_hint()
         self._on_preset_changed()
         self._on_dispatch_mode_changed()
 
@@ -284,11 +317,14 @@ class ControllerApp:
             padding=BTN_PADDING,
         ).pack(side=RIGHT)
 
-        self.files_context_menu = tk.Menu(self.root, tearoff=0)
-        self.files_context_menu.add_command(label="添加文件", command=self._add_files)
-        self.files_context_menu.add_command(label="添加文件夹", command=self._add_folder)
-        self.files_context_menu.add_separator()
-        self.files_context_menu.add_command(label="清空列表", command=self._clear_files)
+        self.files_blank_context_menu = tk.Menu(self.root, tearoff=0)
+        self.files_blank_context_menu.add_command(label="添加文件", command=self._add_files)
+        self.files_blank_context_menu.add_command(label="添加文件夹", command=self._add_folder)
+        self.files_blank_context_menu.add_separator()
+        self.files_blank_context_menu.add_command(label="清空列表", command=self._clear_files)
+
+        self.files_item_context_menu = tk.Menu(self.root, tearoff=0)
+        self.files_item_context_menu.add_command(label="删除任务", command=self._remove_selected_task)
         self.files_tree.bind("<Button-3>", self._show_files_context_menu, add="+")
         self.files_tree.bind("<Button-2>", self._show_files_context_menu, add="+")
 
@@ -343,34 +379,46 @@ class ControllerApp:
 
     def _on_left_canvas_configure(self, event):
         """让左侧内容宽度跟随画布宽度。"""
-        self.left_canvas.itemconfigure(self.left_canvas_window, width=event.width)
+        target_width = max(event.width, self.left_frame.winfo_reqwidth())
+        self.left_canvas.itemconfigure(self.left_canvas_window, width=target_width)
         self._update_left_scroll_state()
 
     def _update_left_scroll_state(self):
         """仅在内容超出可视区时启用左栏滚动。"""
         bbox = self.left_canvas.bbox("all")
         canvas_height = self.left_canvas.winfo_height()
-        if not bbox or canvas_height <= 1:
+        canvas_width = self.left_canvas.winfo_width()
+        if not bbox or canvas_height <= 1 or canvas_width <= 1:
             return
 
         content_height = bbox[3] - bbox[1]
-        should_scroll = content_height > canvas_height + 2
+        content_width = bbox[2] - bbox[0]
+        should_v_scroll = content_height > canvas_height + 2
+        should_h_scroll = content_width > canvas_width + 2
 
-        if should_scroll == self._left_scroll_enabled:
-            return
+        if should_v_scroll != self._left_v_scroll_enabled:
+            self._left_v_scroll_enabled = should_v_scroll
+            if should_v_scroll:
+                if not self.left_v_scrollbar.winfo_ismapped():
+                    self.left_v_scrollbar.pack(side=RIGHT, fill=Y)
+            else:
+                self.left_canvas.yview_moveto(0.0)
+                if self.left_v_scrollbar.winfo_ismapped():
+                    self.left_v_scrollbar.pack_forget()
 
-        self._left_scroll_enabled = should_scroll
-        if should_scroll:
-            if not self.left_scrollbar.winfo_ismapped():
-                self.left_scrollbar.pack(side=RIGHT, fill=Y)
-        else:
-            self.left_canvas.yview_moveto(0.0)
-            if self.left_scrollbar.winfo_ismapped():
-                self.left_scrollbar.pack_forget()
+        if should_h_scroll != self._left_h_scroll_enabled:
+            self._left_h_scroll_enabled = should_h_scroll
+            if should_h_scroll:
+                if not self.left_h_scrollbar.winfo_ismapped():
+                    self.left_h_scrollbar.pack(side=BOTTOM, fill=X)
+            else:
+                self.left_canvas.xview_moveto(0.0)
+                if self.left_h_scrollbar.winfo_ismapped():
+                    self.left_h_scrollbar.pack_forget()
 
     def _on_left_mousewheel(self, event):
         """处理左侧滚动条滚轮滚动。"""
-        if not self._left_scroll_enabled:
+        if not self._left_v_scroll_enabled:
             return "break"
         if event.delta:
             self.left_canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -380,9 +428,22 @@ class ControllerApp:
             self.left_canvas.yview_scroll(1, "units")
         return "break"
 
+    def _on_left_shift_mousewheel(self, event):
+        """处理左侧横向滚轮（Shift + 滚轮）。"""
+        if not self._left_h_scroll_enabled:
+            return "break"
+        if event.delta:
+            self.left_canvas.xview_scroll(int(-event.delta / 120), "units")
+        elif event.num == 4:
+            self.left_canvas.xview_scroll(-1, "units")
+        elif event.num == 5:
+            self.left_canvas.xview_scroll(1, "units")
+        return "break"
+
     def _bind_left_scroll_widgets(self, widget):
         """递归绑定左栏鼠标滚轮事件。"""
         widget.bind("<MouseWheel>", self._on_left_mousewheel, add="+")
+        widget.bind("<Shift-MouseWheel>", self._on_left_shift_mousewheel, add="+")
         widget.bind("<Button-4>", self._on_left_mousewheel, add="+")
         widget.bind("<Button-5>", self._on_left_mousewheel, add="+")
         for child in widget.winfo_children():
@@ -404,10 +465,18 @@ class ControllerApp:
         self._update_codec_support_hint()
 
     def _show_files_context_menu(self, event):
+        row_id = self.files_tree.identify_row(event.y)
+        if row_id:
+            self.files_tree.selection_set(row_id)
+            self.files_tree.focus(row_id)
+            menu = self.files_item_context_menu
+        else:
+            self.files_tree.selection_remove(self.files_tree.selection())
+            menu = self.files_blank_context_menu
         try:
-            self.files_context_menu.tk_popup(event.x_root, event.y_root)
+            menu.tk_popup(event.x_root, event.y_root)
         finally:
-            self.files_context_menu.grab_release()
+            menu.grab_release()
         return "break"
 
     def _schedule_refresh(self):
@@ -462,9 +531,38 @@ class ControllerApp:
         if self.running:
             Messagebox.show_warning("任务执行中，暂不允许清空列表", "提示")
             return
+        if not self.selected_files:
+            return
+        confirm = Messagebox.yesno("确认清空当前文件列表吗？", "确认")
+        if str(confirm).lower() != "yes":
+            return
         self.selected_files = []
         self.file_info_map = {}
+        self.file_tree_item_map = {}
         self.current_tasks = []
+        self._refresh_file_tree()
+        self._refresh_overall_progress()
+
+    def _remove_selected_task(self):
+        if self.running:
+            Messagebox.show_warning("任务执行中，暂不允许删除任务", "提示")
+            return
+        selected = self.files_tree.selection()
+        if not selected:
+            return
+
+        item_id = selected[0]
+        file_path = self.file_tree_item_map.get(item_id)
+        if not file_path:
+            return
+
+        confirm = Messagebox.yesno("确认删除选中的任务吗？", "确认")
+        if str(confirm).lower() != "yes":
+            return
+
+        self.selected_files = [path for path in self.selected_files if path != file_path]
+        self.file_info_map.pop(file_path, None)
+        self.current_tasks = [task for task in self.current_tasks if task.input_file != file_path]
         self._refresh_file_tree()
         self._refresh_overall_progress()
 
@@ -504,10 +602,19 @@ class ControllerApp:
             self.max_width_var.set(width)
             self.max_height_var.set(height)
 
+        self._update_crf_default_hint()
         self._update_codec_support_hint()
 
     def _on_codec_changed(self, _event=None):
+        self._update_crf_default_hint()
         self._update_codec_support_hint()
+
+    def _get_codec_default_quality_hint(self, codec: str) -> str:
+        return CODEC_DEFAULT_QUALITY_HINTS.get(codec, "留空时使用编码器默认值")
+
+    def _update_crf_default_hint(self):
+        codec = self.codec_var.get().strip()
+        self.crf_default_hint_var.set(self._get_codec_default_quality_hint(codec))
 
     def _on_dispatch_mode_changed(self):
         mode = self.dispatch_mode_var.get()
@@ -793,6 +900,7 @@ class ControllerApp:
     def _refresh_file_tree(self):
         for item in self.files_tree.get_children():
             self.files_tree.delete(item)
+        self.file_tree_item_map = {}
 
         output_suffix = self._get_output_suffix()
         for file_path in self.selected_files:
@@ -811,11 +919,12 @@ class ControllerApp:
                 worker_text = ""
                 output_text = os.path.basename(self.controller.build_output_path(file_path, suffix=output_suffix))
 
-            self.files_tree.insert(
+            item_id = self.files_tree.insert(
                 "",
                 END,
                 values=(file_name, source_resolution, status_text, progress_text, worker_text, output_text),
             )
+            self.file_tree_item_map[item_id] = file_path
 
     def _format_node_status(self, status: Any) -> str:
         if isinstance(status, dict):
@@ -893,12 +1002,13 @@ class ControllerApp:
             self.overall_label_var.set(f"总进度: 0% (0/{total})")
             return
 
-        progress_sum = sum(int(task.progress) for task in self.current_tasks)
-        overall_percent = int(progress_sum / total)
+        progress_sum = sum(max(0, min(100, int(task.progress))) for task in self.current_tasks)
+        max_progress = len(self.current_tasks) * 100
+        overall_percent = int(round((progress_sum * 100) / max_progress)) if max_progress else 0
         completed = sum(1 for task in self.current_tasks if task.status == "completed")
 
         self.overall_progress_var.set(overall_percent)
-        self.overall_label_var.set(f"总进度: {overall_percent}% ({completed}/{total})")
+        self.overall_label_var.set(f"总进度: {overall_percent}% ({progress_sum}/{max_progress}，已完成 {completed}/{len(self.current_tasks)})")
 
     def _fetch_capabilities_async(self, worker_ip: str):
         self._capabilities_fetching.add(worker_ip)
