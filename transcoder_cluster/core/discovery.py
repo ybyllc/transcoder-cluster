@@ -49,9 +49,11 @@ class DiscoveryService:
         self.discovered_nodes: Dict[str, Dict[str, Any]] = {}
         self._stop_event = threading.Event()
         self._threads: list = []
+        self._socket: Optional[socket.socket] = None
 
     def start(self) -> None:
         """启动发现服务"""
+        self._stop_event.clear()
         # 启动监听线程
         listener_thread = threading.Thread(target=self._listen_loop, daemon=True)
         listener_thread.start()
@@ -62,6 +64,14 @@ class DiscoveryService:
     def stop(self) -> None:
         """停止发现服务"""
         self._stop_event.set()
+        
+        # 关闭 socket 以打破阻塞的 recvfrom
+        if self._socket:
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+        
         for thread in self._threads:
             if thread.is_alive():
                 thread.join(timeout=2)
@@ -94,32 +104,39 @@ class DiscoveryService:
 
     def _listen_loop(self) -> None:
         """监听循环"""
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-                # 尝试设置 SO_REUSEPORT (Windows 兼容)
+            # 尝试设置 SO_REUSEPORT (Windows 兼容)
+            try:
+                self._socket.setsockopt(socket.SOL_SOCKET, 0x0F, 1)  # SO_REUSEPORT
+            except Exception:
+                pass
+
+            self._socket.bind(("", self.discovery_port))
+            self._socket.settimeout(1)
+
+            while not self._stop_event.is_set():
                 try:
-                    s.setsockopt(socket.SOL_SOCKET, 0x0F, 1)  # SO_REUSEPORT
-                except Exception:
-                    pass
-
-                s.bind(("", self.discovery_port))
-                s.settimeout(1)
-
-                while not self._stop_event.is_set():
-                    try:
-                        data, addr = s.recvfrom(4096)
-                        message = json.loads(data.decode())
-                        self._handle_message(message, addr[0])
-                    except socket.timeout:
-                        continue
-                    except Exception as e:
-                        if not self._stop_event.is_set():
-                            logger.error(f"处理消息错误: {e}")
+                    data, addr = self._socket.recvfrom(4096)
+                    message = json.loads(data.decode())
+                    self._handle_message(message, addr[0])
+                except socket.timeout:
+                    continue
+                except OSError:
+                    # Socket 被关闭，退出循环
+                    break
+                except Exception as e:
+                    if not self._stop_event.is_set():
+                        logger.error(f"处理消息错误: {e}")
 
         except OSError as e:
             logger.error(f"绑定端口失败: {e}")
+        finally:
+            if self._socket:
+                self._socket.close()
+                self._socket = None
 
     def _handle_message(self, message: Dict[str, Any], sender_ip: str) -> None:
         """处理接收到的消息"""
@@ -196,6 +213,7 @@ class HeartbeatService:
 
     def start(self) -> None:
         """启动心跳服务"""
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._thread.start()
         logger.debug(
@@ -217,7 +235,8 @@ class HeartbeatService:
             except Exception as e:
                 logger.error(f"发送心跳失败: {e}")
 
-            time.sleep(self.interval)
+            # 使用 wait 替代 sleep，这样可以被立即唤醒
+            self._stop_event.wait(timeout=self.interval)
 
     def _send_heartbeat(self) -> None:
         """发送心跳"""
@@ -267,9 +286,11 @@ class DiscoveryResponder:
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._socket: Optional[socket.socket] = None
 
     def start(self) -> None:
         """启动发现响应器"""
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._listen_loop, daemon=True)
         self._thread.start()
         logger.debug(
@@ -279,20 +300,29 @@ class DiscoveryResponder:
     def stop(self) -> None:
         """停止发现响应器"""
         self._stop_event.set()
+        
+        # 关闭 socket 以打破阻塞的 recvfrom
+        if self._socket:
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+        
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
         logger.info("发现响应器已停止")
 
     def _listen_loop(self) -> None:
         """监听循环"""
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("", self.discovery_port))
-            s.settimeout(1)
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._socket.bind(("", self.discovery_port))
+            self._socket.settimeout(1)
 
             while not self._stop_event.is_set():
                 try:
-                    data, addr = s.recvfrom(4096)
+                    data, addr = self._socket.recvfrom(4096)
                     msg = json.loads(data.decode())
                     logger.debug(f"[诊断] 收到消息: {msg.get('type')} from {addr}")
 
@@ -306,14 +336,20 @@ class DiscoveryResponder:
                                 "status": self.get_status(),
                             }
                         ).encode()
-                        s.sendto(response, addr)
+                        self._socket.sendto(response, addr)
                         logger.debug(f"[诊断] 响应 discovery 请求到 {addr}, 本机IP: {local_ip}")
 
                 except socket.timeout:
                     continue
+                except OSError:
+                    # Socket 被关闭，退出循环
+                    break
                 except Exception as e:
                     if not self._stop_event.is_set():
                         logger.error(f"发现响应器错误: {e}")
+        finally:
+            self._socket.close()
+            self._socket = None
 
     def _get_local_ip(self) -> str:
         """获取本地 IP"""

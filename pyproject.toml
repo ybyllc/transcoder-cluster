@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "transcoder-cluster"
-version = "1.0.0"
+version = "0.2.0"
 description = "Distributed FFmpeg video transcoding cluster system"
 readme = "README.md"
 license = {text = "MIT"}

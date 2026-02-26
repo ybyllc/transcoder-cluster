@@ -38,12 +38,58 @@ def parse_ffmpeg_progress(line: str) -> Optional[float]:
     return None
 
 
+def get_ffmpeg_version(ffmpeg_path: str) -> Optional[str]:
+    """获取 FFmpeg 版本号。"""
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        first_line = result.stdout.splitlines()[0] if result.stdout else ""
+        match = re.search(r"ffmpeg version\s+([^\s]+)", first_line)
+        return match.group(1) if match else first_line or None
+    except Exception:
+        return None
+
+
+def list_ffmpeg_encoders(ffmpeg_path: str) -> list:
+    """获取 FFmpeg 支持的编码器列表。"""
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            return []
+
+        encoders = []
+        for line in result.stdout.splitlines():
+            # 示例: " V..... h264_nvenc           NVIDIA NVENC H.264 encoder"
+            match = re.match(r"^\s*[VAS\.]{6}\s+([^\s]+)\s+", line)
+            if match:
+                encoders.append(match.group(1))
+        return sorted(set(encoders))
+    except Exception:
+        return []
+
+
 class WorkerHandler(BaseHTTPRequestHandler):
     """Worker HTTP 请求处理器"""
 
     # 类级别变量，用于存储状态
     status: Dict[str, Any] = {"status": "idle", "current_task": None, "progress": 0}
+    capabilities: Dict[str, Any] = {}
     on_task_complete: Optional[Callable] = None
+    
+    # 当前 FFmpeg 进程
+    _ffmpeg_proc: Optional[subprocess.Popen] = None
+    _stop_requested: bool = False
 
     def log_message(self, format: str, *args) -> None:
         """重写日志方法，使用自定义 logger"""
@@ -59,6 +105,14 @@ class WorkerHandler(BaseHTTPRequestHandler):
     def _handle_task(self) -> None:
         """处理转码任务"""
         try:
+            # 更新状态为接收中
+            WorkerHandler.status = {
+                "status": "receiving",
+                "current_task": None,
+                "progress": 0,
+                "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            
             # 接收数据
             content_length = int(self.headers["Content-Length"])
             received = 0
@@ -74,6 +128,10 @@ class WorkerHandler(BaseHTTPRequestHandler):
                     break
                 chunks.append(chunk)
                 received += len(chunk)
+                
+                # 更新接收进度
+                recv_progress = int(received / content_length * 100)
+                WorkerHandler.status["progress"] = recv_progress
 
             logger.info("文件接收完成")
 
@@ -127,6 +185,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
             "progress": 0,
             "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
+        
+        # 重置停止标志
+        WorkerHandler._stop_requested = False
 
         cmd = [config.ffmpeg_path, "-y", "-i", input_path] + ffmpeg_args + [output_path]
         logger.info(f"开始转码: {' '.join(cmd)}")
@@ -149,14 +210,44 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 startupinfo=startupinfo,
                 creationflags=creationflags
             )
+            
+            # 保存进程引用以便可以终止
+            WorkerHandler._ffmpeg_proc = proc
 
             # 获取视频时长
             duration = self._get_video_duration(input_path)
 
-            # 实时读取进度
+            # 实时读取进度，同时检查停止请求
             last_percent = -1
             last_log_percent = -1
-            for line in proc.stderr:
+            while True:
+                # 检查是否请求停止
+                if WorkerHandler._stop_requested:
+                    logger.info("收到停止请求，正在终止 FFmpeg 进程...")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                    WorkerHandler._ffmpeg_proc = None
+                    WorkerHandler.status = {
+                        "status": "stopped",
+                        "current_task": None,
+                        "progress": 0,
+                        "end_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    logger.info("FFmpeg 进程已终止")
+                    return {"status": "stopped", "error": "转码被用户中断"}
+                
+                # 非阻塞读取一行
+                line = proc.stderr.readline()
+                if not line:
+                    # 检查进程是否结束
+                    if proc.poll() is not None:
+                        break
+                    continue
+                
                 sec = parse_ffmpeg_progress(line)
                 if sec and duration:
                     percent = int(sec / duration * 100)
@@ -169,6 +260,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                         last_log_percent = percent
 
             proc.wait()
+            WorkerHandler._ffmpeg_proc = None
 
             if proc.returncode == 0:
                 WorkerHandler.status = {
@@ -189,6 +281,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 return {"status": "fail", "error": f"FFmpeg returned code {proc.returncode}"}
 
         except Exception as e:
+            WorkerHandler._ffmpeg_proc = None
             WorkerHandler.status = {
                 "status": "error",
                 "current_task": None,
@@ -217,6 +310,8 @@ class WorkerHandler(BaseHTTPRequestHandler):
             self._handle_ping()
         elif self.path == "/status":
             self._handle_status()
+        elif self.path == "/capabilities":
+            self._handle_capabilities()
         else:
             self.send_error(404, "Not Found")
 
@@ -252,6 +347,29 @@ class WorkerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(WorkerHandler.status).encode())
+
+    @classmethod
+    def _build_capabilities(cls) -> Dict[str, Any]:
+        """构建并缓存节点能力信息。"""
+        ffmpeg_version = get_ffmpeg_version(config.ffmpeg_path)
+        encoders = list_ffmpeg_encoders(config.ffmpeg_path) if ffmpeg_version else []
+        nvenc_supported = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
+
+        cls.capabilities = {
+            "ffmpeg_installed": bool(ffmpeg_version),
+            "ffmpeg_version": ffmpeg_version,
+            "encoders": encoders,
+            "nvenc_supported": nvenc_supported,
+        }
+        return cls.capabilities
+
+    def _handle_capabilities(self) -> None:
+        """处理能力查询请求。"""
+        capabilities = WorkerHandler.capabilities or WorkerHandler._build_capabilities()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(capabilities).encode())
 
 
 class Worker:
@@ -305,8 +423,26 @@ class Worker:
         self._server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._server_thread.start()
 
+    def stop_ffmpeg(self) -> None:
+        """停止当前运行的 FFmpeg 进程"""
+        WorkerHandler._stop_requested = True
+        if WorkerHandler._ffmpeg_proc and WorkerHandler._ffmpeg_proc.poll() is None:
+            logger.info("正在终止 FFmpeg 进程...")
+            try:
+                WorkerHandler._ffmpeg_proc.terminate()
+                WorkerHandler._ffmpeg_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                WorkerHandler._ffmpeg_proc.kill()
+                WorkerHandler._ffmpeg_proc.wait()
+            except Exception as e:
+                logger.debug(f"终止 FFmpeg 进程时出错: {e}")
+            WorkerHandler._ffmpeg_proc = None
+
     def stop(self) -> None:
         """停止 Worker 服务器"""
+        # 首先停止 FFmpeg 进程
+        self.stop_ffmpeg()
+        
         if self.server:
             was_running = self._running
             self._running = False
