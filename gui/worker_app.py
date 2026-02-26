@@ -275,6 +275,21 @@ class WorkerApp:
         except Exception as error:
             logger.debug(f"停止托盘图标失败: {error}")
 
+    def _show_tray_minimize_notification(self, retries: int = 3):
+        """最小化到托盘后显示系统通知。"""
+        icon = self._tray_icon
+        if icon is None:
+            return
+        notify_func = getattr(icon, "notify", None)
+        if not callable(notify_func):
+            return
+        try:
+            notify_func("子节点正在后台运行，双击托盘图标可恢复窗口。", "Transcoder Cluster 子节点")
+        except Exception:
+            # 托盘线程刚启动时可能短暂不可用，做有限次重试。
+            if retries > 0:
+                self.root.after(180, lambda: self._show_tray_minimize_notification(retries=retries - 1))
+
     def _minimize_to_tray(self, show_log: bool = True):
         """最小化到系统托盘并后台运行。"""
         if self._is_in_tray or self._is_closing:
@@ -288,6 +303,7 @@ class WorkerApp:
                 self._is_in_tray = True
                 if show_log:
                     self._log("窗口已最小化到系统托盘，子节点继续后台运行")
+                self._show_tray_minimize_notification()
             else:
                 # 依赖缺失时回退到任务栏最小化
                 self.root.iconify()
