@@ -220,6 +220,9 @@ def main():
     root = tk.Tk()
     app = WorkerApp(root)
     
+    # 自动启动 Worker
+    root.after(100, app._start_worker)
+    
     def on_close():
         app._log("正在关闭窗口...")
         # 先隐藏窗口，然后异步关闭
