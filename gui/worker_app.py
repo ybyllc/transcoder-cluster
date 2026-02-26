@@ -11,8 +11,8 @@ import threading
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from ttkbootstrap.scrolled import ScrolledText
 from ttkbootstrap.widgets import ToolTip
+from ttkbootstrap.widgets.scrolled import ScrolledText
 from datetime import datetime
 
 from transcoder_cluster.core.worker import Worker, WorkerHandler
