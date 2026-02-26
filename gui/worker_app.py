@@ -9,6 +9,7 @@ GUI Worker 节点应用
 import os
 import threading
 import logging
+import tkinter.messagebox as tk_messagebox
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -22,17 +23,6 @@ from transcoder_cluster.core.worker import Worker, WorkerHandler
 from transcoder_cluster.core.discovery import HeartbeatService, DiscoveryResponder
 from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
-
-try:
-    import pystray
-except Exception:
-    pystray = None
-
-try:
-    from PIL import Image, ImageDraw
-except Exception:
-    Image = None
-    ImageDraw = None
 
 logger = get_logger(__name__)
 
@@ -74,6 +64,10 @@ class WorkerApp:
         self._tray_icon = None
         self._tray_warned_unavailable = False
         self._tray_op_in_progress = False
+        self._tray_deps_checked = False
+        self._pystray = None
+        self._pil_image = None
+        self._pil_draw = None
 
         # 创建界面
         self._create_ui()
@@ -208,21 +202,37 @@ class WorkerApp:
         # 记录启动时间
         self.start_time = None
 
-    @staticmethod
-    def _is_confirmed_yes(confirm) -> bool:
-        """兼容 Messagebox.yesno 在不同平台/主题下的返回值。"""
-        if isinstance(confirm, bool):
-            return confirm
-        return str(confirm).strip().lower() in {"yes", "true", "ok", "1", "y", "是", "确定"}
+    def _load_tray_dependencies(self):
+        """按需加载托盘依赖，避免影响启动速度。"""
+        if self._tray_deps_checked:
+            return
+        self._tray_deps_checked = True
+
+        try:
+            import pystray as pystray_module
+            self._pystray = pystray_module
+        except Exception:
+            self._pystray = None
+
+        try:
+            from PIL import Image as pil_image
+            from PIL import ImageDraw as pil_draw
+
+            self._pil_image = pil_image
+            self._pil_draw = pil_draw
+        except Exception:
+            self._pil_image = None
+            self._pil_draw = None
 
     def _tray_supported(self) -> bool:
-        return bool(pystray and Image and ImageDraw)
+        self._load_tray_dependencies()
+        return bool(self._pystray and self._pil_image and self._pil_draw)
 
     def _create_tray_image(self):
         """创建托盘图标。"""
         # 16x16 简单双色图标，避免依赖外部图片资源。
-        img = Image.new("RGB", (16, 16), "#1F6AA5")
-        draw = ImageDraw.Draw(img)
+        img = self._pil_image.new("RGB", (16, 16), "#1F6AA5")
+        draw = self._pil_draw.Draw(img)
         draw.rectangle((3, 3, 12, 12), outline="white", width=1)
         draw.rectangle((5, 5, 10, 10), fill="white")
         return img
@@ -237,11 +247,11 @@ class WorkerApp:
                 Messagebox.show_warning("系统托盘依赖缺失（pystray/Pillow），将退化为任务栏最小化。", "提示")
             return False
 
-        menu = pystray.Menu(
-            pystray.MenuItem("打开窗口", lambda _icon, _item: self.root.after(0, self._restore_from_tray)),
-            pystray.MenuItem("退出子节点", lambda _icon, _item: self.root.after(0, self._exit_application)),
+        menu = self._pystray.Menu(
+            self._pystray.MenuItem("打开窗口", lambda _icon, _item: self.root.after(0, self._restore_from_tray)),
+            self._pystray.MenuItem("退出子节点", lambda _icon, _item: self.root.after(0, self._exit_application)),
         )
-        self._tray_icon = pystray.Icon(
+        self._tray_icon = self._pystray.Icon(
             "transcoder_cluster_worker",
             self._create_tray_image(),
             "Transcoder Cluster 子节点",
@@ -308,11 +318,12 @@ class WorkerApp:
 
     def _on_window_close_request(self):
         """点击窗口 × 时，询问最小化到系统托盘还是退出。"""
-        confirm = Messagebox.yesno(
-            "是否最小化到系统托盘并在后台继续运行？\n选择“否”将停止子节点并退出。",
-            "关闭确认",
+        confirm = tk_messagebox.askokcancel(
+            title="关闭确认",
+            message="确定：最小化到系统托盘并后台运行\n取消：停止子节点并退出",
+            parent=self.root,
         )
-        if self._is_confirmed_yes(confirm):
+        if confirm:
             self._minimize_to_tray(show_log=True)
             return
         self._exit_application()
