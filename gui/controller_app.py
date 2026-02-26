@@ -1102,7 +1102,7 @@ class ControllerApp:
         completed = sum(1 for task in self.current_tasks if task.status == "completed")
 
         self.overall_progress_var.set(overall_percent)
-        self.overall_label_var.set(f"总进度: {overall_percent}% ({progress_sum}/{max_progress}，已完成 {completed}/{len(self.current_tasks)})")
+        self.overall_label_var.set(f"总进度: {overall_percent}% (已完成 {completed}/{len(self.current_tasks)})")
 
     def _fetch_capabilities_async(self, worker_ip: str):
         self._capabilities_fetching.add(worker_ip)
