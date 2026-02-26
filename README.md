@@ -18,7 +18,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/ybyllc/transcoder-cluster)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/psf/black)
 
-[🚀 快速开始](#-快速开始) • [📖 文档](#-目录) • [🤝 贡献](#-贡献指南) • [💬 讨论](https://github.com/ybyllc/transcoder-cluster/discussions)
+[🚀 快速开始](#-快速开始) • [📖 文档](#-目录) • [🧭 通信流程](transcoder_cluster/core/COMMUNICATION_FLOW.md) • [🤝 贡献](#-贡献指南) • [💬 讨论](https://github.com/ybyllc/transcoder-cluster/discussions)
 
 </div>
 
@@ -42,6 +42,7 @@
 
 - [功能特性](#-功能特性)
 - [系统架构](#️-系统架构)
+- [通信流程笔记（Core）](transcoder_cluster/core/COMMUNICATION_FLOW.md)
 - [环境要求](#-环境要求)
 - [安装](#-安装)
 - [快速开始](#-快速开始)
@@ -405,6 +406,8 @@ transcoder-cluster/
 ```
 
 ## 🔨 开发指南
+
+核心通信链路说明见: [`transcoder_cluster/core/COMMUNICATION_FLOW.md`](transcoder_cluster/core/COMMUNICATION_FLOW.md)
 
 ### 设置开发环境
 
