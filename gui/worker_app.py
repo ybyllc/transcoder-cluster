@@ -47,8 +47,6 @@ class WorkerGuiLogHandler(logging.Handler):
 
 class WorkerApp:
     """GUI Worker 节点应用"""
-    TRAY_ANIMATION_STEPS = 8
-    TRAY_ANIMATION_INTERVAL_MS = 14
     
     def __init__(self, root: ttk.Window):
         self.root = root
@@ -70,9 +68,6 @@ class WorkerApp:
         self._pystray = None
         self._pil_image = None
         self._pil_draw = None
-        self._tray_animation_running = False
-        self._suppress_unmap = False
-        self._restore_geometry = None
 
         # 创建界面
         self._create_ui()
@@ -280,95 +275,24 @@ class WorkerApp:
         except Exception as error:
             logger.debug(f"停止托盘图标失败: {error}")
 
-    def _current_window_rect(self):
-        self.root.update_idletasks()
-        return (
-            int(self.root.winfo_x()),
-            int(self.root.winfo_y()),
-            int(self.root.winfo_width()),
-            int(self.root.winfo_height()),
-        )
-
-    def _tray_target_rect(self):
-        screen_w = int(self.root.winfo_screenwidth())
-        screen_h = int(self.root.winfo_screenheight())
-        target_w = 180
-        target_h = 100
-        margin_x = 26
-        margin_y = 52
-        target_x = max(0, screen_w - target_w - margin_x)
-        target_y = max(0, screen_h - target_h - margin_y)
-        return target_x, target_y, target_w, target_h
-
-    def _animate_minimize_to_tray(self, on_done):
-        """窗口飞入右下角的近似动画。"""
-        if self._tray_animation_running:
-            on_done()
-            return
-
-        self._tray_animation_running = True
-        try:
-            self.root.deiconify()
-            self.root.state("normal")
-        except Exception:
-            pass
-
-        start_x, start_y, start_w, start_h = self._current_window_rect()
-        self._restore_geometry = f"{start_w}x{start_h}+{start_x}+{start_y}"
-        end_x, end_y, end_w, end_h = self._tray_target_rect()
-        steps = max(1, int(self.TRAY_ANIMATION_STEPS))
-
-        def tick(step: int):
-            t = step / steps
-            cur_x = int(start_x + (end_x - start_x) * t)
-            cur_y = int(start_y + (end_y - start_y) * t)
-            cur_w = max(140, int(start_w + (end_w - start_w) * t))
-            cur_h = max(90, int(start_h + (end_h - start_h) * t))
-            try:
-                self.root.geometry(f"{cur_w}x{cur_h}+{cur_x}+{cur_y}")
-            except Exception:
-                pass
-
-            if step < steps:
-                self.root.after(self.TRAY_ANIMATION_INTERVAL_MS, lambda: tick(step + 1))
-            else:
-                self._tray_animation_running = False
-                on_done()
-
-        tick(1)
-
-    def _hide_window_to_tray(self, show_log: bool):
-        self._suppress_unmap = True
-        self.root.withdraw()
-        self.root.after(120, lambda: setattr(self, "_suppress_unmap", False))
-        self._is_in_tray = True
-        if show_log:
-            self._log("窗口已最小化到系统托盘，子节点继续后台运行")
-
-    def _minimize_to_tray(self, show_log: bool = True, animate: bool = True):
+    def _minimize_to_tray(self, show_log: bool = True):
         """最小化到系统托盘并后台运行。"""
         if self._is_in_tray or self._is_closing:
             return
         if self._tray_op_in_progress:
             return
         self._tray_op_in_progress = True
-
-        if self._ensure_tray_icon():
-            def done():
-                self._hide_window_to_tray(show_log=show_log)
-                self._tray_op_in_progress = False
-
-            if animate:
-                self._animate_minimize_to_tray(on_done=done)
-            else:
-                done()
-            return
-
-        # 依赖缺失时回退到任务栏最小化
         try:
-            self.root.iconify()
-            if show_log:
-                self._log("窗口已最小化到任务栏，子节点继续后台运行")
+            if self._ensure_tray_icon():
+                self.root.withdraw()
+                self._is_in_tray = True
+                if show_log:
+                    self._log("窗口已最小化到系统托盘，子节点继续后台运行")
+            else:
+                # 依赖缺失时回退到任务栏最小化
+                self.root.iconify()
+                if show_log:
+                    self._log("窗口已最小化到任务栏，子节点继续后台运行")
         finally:
             self._tray_op_in_progress = False
 
@@ -380,8 +304,6 @@ class WorkerApp:
         try:
             self.root.deiconify()
             self.root.state("normal")
-            if self._restore_geometry:
-                self.root.geometry(self._restore_geometry)
             self.root.lift()
         except Exception as error:
             logger.debug(f"恢复窗口失败: {error}")
@@ -392,12 +314,10 @@ class WorkerApp:
         """处理标题栏最小化（_）：自动入托盘后台运行。"""
         if self._is_closing or self._is_in_tray:
             return
-        if self._suppress_unmap:
-            return
         try:
             if str(self.root.state()) == "iconic":
                 # 用 after 回到主循环再处理，避免窗口状态竞争。
-                self.root.after(0, lambda: self._minimize_to_tray(show_log=True, animate=True))
+                self.root.after(0, self._minimize_to_tray)
         except Exception:
             pass
 
@@ -409,7 +329,7 @@ class WorkerApp:
             parent=self.root,
         )
         if confirm:
-            self._minimize_to_tray(show_log=True, animate=True)
+            self._minimize_to_tray(show_log=True)
             return
         self._exit_application()
 
