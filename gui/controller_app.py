@@ -874,6 +874,12 @@ class ControllerApp:
         self._refresh_overall_progress()
 
     def _on_node_runtime_update(self, worker_ip: str, status: Dict[str, Any]):
+        incoming_state = self._get_status_value(status)
+        # 轮询偶发超时时，避免用 unknown 覆盖正在上传/处理中的状态。
+        if incoming_state == "unknown":
+            current_state = self._get_status_value(self.node_runtime_status.get(worker_ip))
+            if current_state in ("receiving", "uploading", "processing"):
+                return
         self.node_runtime_status[worker_ip] = status
         self._refresh_nodes_tree()
 
@@ -957,6 +963,14 @@ class ControllerApp:
                 return task
         return None
 
+    def _get_status_value(self, status: Any) -> str:
+        """标准化节点状态值，便于比较。"""
+        if isinstance(status, dict):
+            return str(status.get("status", "unknown")).lower()
+        if status is None:
+            return "unknown"
+        return str(status).lower()
+
     def _format_task_status(self, status: str) -> str:
         mapping = {
             "pending": "等待中",
@@ -1001,6 +1015,8 @@ class ControllerApp:
         if isinstance(status, dict):
             state = status.get("status", "unknown")
             progress = int(status.get("progress", 0))
+            if state in ("receiving", "uploading"):
+                return f"上传中({progress}%)"
             if state == "processing":
                 return f"处理中({progress}%)"
             if state in ("idle", "completed"):
@@ -1011,6 +1027,8 @@ class ControllerApp:
 
         state = str(status)
         mapping = {
+            "receiving": "上传中",
+            "uploading": "上传中",
             "processing": "处理中",
             "idle": "空闲",
             "completed": "空闲",
@@ -1031,7 +1049,12 @@ class ControllerApp:
         for node_info in self.discovery.discovered_nodes.values():
             ip = node_info.get("ip", "")
             runtime_status = self.node_runtime_status.get(ip)
-            status_source = runtime_status if runtime_status else node_info.get("status", "unknown")
+            discovery_status = node_info.get("status", "unknown")
+            runtime_state = self._get_status_value(runtime_status)
+            if runtime_status and runtime_state != "unknown":
+                status_source = runtime_status
+            else:
+                status_source = discovery_status
 
             progress = "--"
             if isinstance(status_source, dict):

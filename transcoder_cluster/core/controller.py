@@ -458,7 +458,12 @@ class Controller:
                 if on_node_update:
                     on_node_update(worker_ip, status)
                 current_status = status.get("status")
-                if current_status == "processing":
+                if current_status in ("receiving", "uploading"):
+                    task.status = "uploading"
+                    task.progress = int(status.get("progress", 0))
+                    if on_task_update:
+                        on_task_update(task)
+                elif current_status == "processing":
                     task.status = "processing"
                     task.progress = int(status.get("progress", 0))
                     if on_task_update:
