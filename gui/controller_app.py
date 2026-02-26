@@ -6,6 +6,8 @@ GUI 控制端应用
 """
 
 import os
+import subprocess
+import sys
 import threading
 from datetime import datetime
 
@@ -19,6 +21,49 @@ from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def send_system_notification(title: str, message: str):
+    """发送系统通知
+    
+    Args:
+        title: 通知标题
+        message: 通知内容
+    """
+    try:
+        if sys.platform == 'win32':
+            # Windows: 使用 PowerShell 发送 Toast 通知
+            ps_script = f'''
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+            $template = @"
+            <toast>
+                <visual>
+                    <binding template="ToastText02">
+                        <text id="1">{title}</text>
+                        <text id="2">{message}</text>
+                    </binding>
+                </visual>
+            </toast>
+"@
+            $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+            $xml.LoadXml($template)
+            $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+            [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Transcoder Cluster").Show($toast)
+            '''
+            subprocess.run(['powershell', '-Command', ps_script],
+                         capture_output=True, timeout=10)
+        elif sys.platform == 'darwin':
+            # macOS: 使用 osascript
+            subprocess.run(['osascript', '-e',
+                          f'display notification "{message}" with title "{title}"'],
+                         capture_output=True, timeout=10)
+        else:
+            # Linux: 使用 notify-send
+            subprocess.run(['notify-send', title, message],
+                         capture_output=True, timeout=10)
+    except Exception as e:
+        logger.debug(f"发送系统通知失败: {e}")
 
 
 class ControllerApp:
@@ -232,7 +277,9 @@ class ControllerApp:
         if isinstance(status, dict):
             node_status = status.get("status", "unknown")
             progress = status.get("progress", 0)
-            if node_status == "processing":
+            if node_status == "receiving":
+                return f"📥 接收中 ({progress}%)"
+            elif node_status == "processing":
                 return f"🔄 处理中 ({progress}%)"
             elif node_status == "completed":
                 return "✅ 空闲"
@@ -240,15 +287,19 @@ class ControllerApp:
                 return "✅ 空闲"
             elif node_status == "error":
                 return f"⚠️ 错误"
+            elif node_status == "stopped":
+                return "⏹️ 已停止"
             else:
                 return f"📊 {node_status}"
         
         # 如果是字符串
         status_map = {
             "idle": "✅ 空闲",
+            "receiving": "📥 接收中",
             "processing": "🔄 处理中",
             "completed": "✅ 空闲",
             "error": "⚠️ 错误",
+            "stopped": "⏹️ 已停止",
             "unknown": "❓ 未知"
         }
         return status_map.get(status, str(status))
@@ -278,7 +329,8 @@ class ControllerApp:
             "processing": "🔄 处理中",
             "completed": "✅ 已完成",
             "failed": "❌ 失败",
-            "error": "⚠️ 错误"
+            "error": "⚠️ 错误",
+            "stopped": "⏹️ 已停止"
         }
         return status_map.get(status, status)
     
@@ -394,9 +446,12 @@ class ControllerApp:
         # 提交任务
         def submit_task():
             try:
+                # 更新任务状态为上传中
+                task.status = "uploading"
+                self.root.after(0, self._refresh_all)
+                
                 # 启动一个线程定期更新进度
                 stop_progress_update = threading.Event()
-                last_worker_status = [None]  # 用于跟踪上一次的 Worker 状态
                 
                 def update_progress():
                     """定期从 Worker 获取进度并更新任务"""
@@ -404,38 +459,57 @@ class ControllerApp:
                         try:
                             status = self.controller.get_worker_status(worker_ip)
                             current_status = status.get("status")
+                            progress = status.get("progress", 0)
+                            error_msg = status.get("error", "")
+                            
+                            # 保存上一次的状态用于判断状态变化
+                            old_status = task.status
                             
                             # 状态变化时更新
-                            if current_status == "processing":
-                                progress = status.get("progress", 0)
+                            if current_status == "receiving":
+                                # Worker 正在接收文件
+                                task.status = "uploading"
                                 task.progress = progress
+                            elif current_status == "processing":
                                 task.status = "processing"
-                                self.root.after(0, self._refresh_tasks)
-                                last_worker_status[0] = "processing"
+                                task.progress = progress
                             elif current_status == "completed":
-                                # 只有之前是 processing 才认为任务完成
-                                if last_worker_status[0] == "processing":
-                                    task.progress = 100
-                                    task.status = "completed"
-                                    self.root.after(0, self._refresh_tasks)
-                                    break
+                                # Worker 报告完成（转码完成，等待响应）
+                                task.progress = 100
+                                # 不立即设置为 completed，等 submit_task 返回确认
                             elif current_status == "idle":
-                                # Worker 空闲，说明还没开始或已完成
-                                if last_worker_status[0] == "processing":
-                                    # 从 processing 变为 idle，说明完成了
-                                    task.progress = 100
-                                    task.status = "completed"
-                                    self.root.after(0, self._refresh_tasks)
-                                    break
-                        except Exception:
-                            pass
+                                # Worker 空闲，可能还没开始或已完成
+                                pass
+                            elif current_status == "stopped":
+                                # Worker 被停止
+                                task.status = "stopped"
+                                task.error = "转码被中断"
+                                self.root.after(0, self._refresh_all)
+                                break
+                            elif current_status == "error":
+                                # Worker 报告错误
+                                task.status = "failed"
+                                task.error = error_msg if error_msg else "未知错误"
+                                self._log(f"任务 {task.id} 失败: {task.error}")
+                                self.root.after(0, self._refresh_all)
+                                break
+                            
+                            # 只有状态或进度变化时才刷新
+                            if old_status != task.status or task.progress != progress:
+                                self.root.after(0, self._refresh_all)
+                                
+                        except Exception as e:
+                            logger.debug(f"获取 Worker 状态失败: {e}")
                         stop_progress_update.wait(0.5)  # 每0.5秒更新一次
                 
                 progress_thread = threading.Thread(target=update_progress, daemon=True)
                 progress_thread.start()
                 
+                # 提交任务（这是一个阻塞调用，会等待 Worker 完成）
                 result = self.controller.submit_task(task, worker_ip)
-                stop_progress_update.set()  # 停止进度更新线程
+                
+                # 停止进度更新线程
+                stop_progress_update.set()
                 
                 if result.get("status") == "success":
                     task.status = "completed"
@@ -449,26 +523,73 @@ class ControllerApp:
                             os.path.basename(output_file),
                             output_path
                         )
+                    # 发送系统通知
+                    send_system_notification("转码完成", f"任务 {task.id} 已完成\n输出: {os.path.basename(output_path)}")
                     self.root.after(0, lambda: messagebox.showinfo("成功", f"转码完成: {output_path}"))
+                elif result.get("status") == "stopped":
+                    task.status = "stopped"
+                    task.error = "转码被中断"
+                    self._log(f"任务 {task.id} 已停止")
+                    send_system_notification("转码停止", f"任务 {task.id} 被中断")
                 else:
                     task.status = "failed"
-                    self._log(f"任务 {task.id} 失败: {result.get('error')}")
-                    self.root.after(0, lambda: messagebox.showerror("失败", f"转码失败: {result.get('error')}"))
+                    task.error = result.get("error", "未知错误")
+                    self._log(f"任务 {task.id} 失败: {task.error}")
+                    # 发送系统通知
+                    send_system_notification("转码失败", f"任务 {task.id} 失败\n错误: {task.error}")
+                    self.root.after(0, lambda: messagebox.showerror("失败", f"转码失败: {task.error}"))
+                    
+                # 检查是否所有任务都已完成
+                self._check_all_tasks_completed()
             except Exception as e:
                 task.status = "error"
                 task.error = str(e)
                 self._log(f"任务异常: {e}")
+                send_system_notification("转码错误", f"任务 {task.id} 发生错误\n{str(e)}")
                 self.root.after(0, lambda: messagebox.showerror("错误", str(e)))
             
-            self.root.after(0, self._refresh_tasks)
+            # 最终刷新
+            self.root.after(0, self._refresh_all)
         
         threading.Thread(target=submit_task, daemon=True).start()
+        self._refresh_all()
+    
+    def _refresh_all(self):
+        """同时刷新任务列表和节点列表，保证UI一致性"""
         self._refresh_tasks()
+        self._refresh_nodes()
+    
+    def _check_all_tasks_completed(self):
+        """检查是否所有任务都已完成，如果是则发送通知"""
+        if not self.controller.tasks:
+            return
+        
+        all_done = all(
+            t.status in ("completed", "failed", "error", "stopped")
+            for t in self.controller.tasks
+        )
+        
+        if all_done:
+            completed = sum(1 for t in self.controller.tasks if t.status == "completed")
+            failed = sum(1 for t in self.controller.tasks if t.status in ("failed", "error", "stopped"))
+            total = len(self.controller.tasks)
+            
+            if failed == 0:
+                send_system_notification(
+                    "所有任务完成",
+                    f"全部 {total} 个任务已成功完成"
+                )
+                self._log(f"✅ 所有 {total} 个任务已成功完成")
+            else:
+                send_system_notification(
+                    "任务执行完毕",
+                    f"完成: {completed}, 失败: {failed}, 总计: {total}"
+                )
+                self._log(f"📊 任务执行完毕 - 完成: {completed}, 失败: {failed}")
     
     def _schedule_refresh(self):
         """定时刷新"""
-        self._refresh_nodes()
-        self._refresh_tasks()
+        self._refresh_all()
         self.root.after(5000, self._schedule_refresh)
     
     def run(self):
@@ -486,8 +607,16 @@ def main():
     app = ControllerApp(root)
     
     def on_close():
-        app.close()
-        root.destroy()
+        # 先隐藏窗口
+        root.withdraw()
+        
+        def do_close():
+            app.discovery.stop()
+            # 在主线程中销毁窗口
+            root.after(0, root.destroy)
+        
+        # 异步关闭
+        threading.Thread(target=do_close, daemon=True).start()
     
     root.protocol("WM_DELETE_WINDOW", on_close)
     app.run()

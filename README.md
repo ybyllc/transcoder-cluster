@@ -4,7 +4,9 @@
 
 **分布式 FFmpeg 视频转码集群系统**
 
-在局域网内实现多节点并行视频转码
+通过 FFmpeg 压制来压缩视频体积，并通过多节点集群增加转码速度。
+
+**核心原理**：利用 FFmpeg 的压制命令对视频进行转码压缩，视频文件通过 Base64 编码传输到各个 Worker 节点，实现多节点协同工作。
 
 [![GitHub stars](https://img.shields.io/github/stars/ybyllc/transcoder-cluster?style=for-the-badge&logo=github&color=yellow)](https://github.com/ybyllc/transcoder-cluster/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/ybyllc/transcoder-cluster?style=for-the-badge&logo=github&color=blue)](https://github.com/ybyllc/transcoder-cluster/network/members)

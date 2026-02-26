@@ -140,20 +140,29 @@ class WorkerApp:
     
     def _stop_worker(self):
         """停止 Worker"""
-        if self.worker:
-            self.worker.stop()
+        self._log("正在停止 Worker...")
         
-        if self.heartbeat:
-            self.heartbeat.stop()
+        # 在后台线程中执行停止操作，避免阻塞 UI
+        def do_stop():
+            if self.heartbeat:
+                self.heartbeat.stop()
+            
+            if self.responder:
+                self.responder.stop()
+            
+            if self.worker:
+                self.worker.stop()
+            
+            # 在主线程中更新 UI
+            self.root.after(0, self._on_stop_complete)
         
-        if self.responder:
-            self.responder.stop()
-        
-        # 更新 UI
+        threading.Thread(target=do_stop, daemon=True).start()
+    
+    def _on_stop_complete(self):
+        """停止完成后的 UI 更新"""
         self.status_var.set("已停止")
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
-        
         self._log("Worker 已停止")
     
     def _schedule_refresh(self):
@@ -182,9 +191,28 @@ class WorkerApp:
         """运行应用"""
         self.root.mainloop()
     
-    def close(self):
-        """关闭应用"""
-        self._stop_worker()
+    def close(self, on_complete: callable = None):
+        """关闭应用
+        
+        Args:
+            on_complete: 关闭完成后的回调函数
+        """
+        self._log("正在关闭应用...")
+        
+        def do_close():
+            if self.heartbeat:
+                self.heartbeat.stop()
+            
+            if self.responder:
+                self.responder.stop()
+            
+            if self.worker:
+                self.worker.stop()
+            
+            if on_complete:
+                on_complete()
+        
+        threading.Thread(target=do_close, daemon=True).start()
 
 
 def main():
@@ -193,8 +221,24 @@ def main():
     app = WorkerApp(root)
     
     def on_close():
-        app.close()
-        root.destroy()
+        app._log("正在关闭窗口...")
+        # 先隐藏窗口，然后异步关闭
+        root.withdraw()
+        
+        def do_close():
+            if app.heartbeat:
+                app.heartbeat.stop()
+            
+            if app.responder:
+                app.responder.stop()
+            
+            if app.worker:
+                app.worker.stop()
+            
+            # 在主线程中销毁窗口
+            root.after(0, root.destroy)
+        
+        threading.Thread(target=do_close, daemon=True).start()
     
     root.protocol("WM_DELETE_WINDOW", on_close)
     app.run()
