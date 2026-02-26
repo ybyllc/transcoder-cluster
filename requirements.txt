@@ -4,3 +4,5 @@ ffmpeg-python>=0.2.0
 
 # GUI 依赖
 ttkbootstrap>=1.10.0
+pystray>=0.19.5
+Pillow>=10.0.0

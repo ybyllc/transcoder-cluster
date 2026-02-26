@@ -23,6 +23,17 @@ from transcoder_cluster.core.discovery import HeartbeatService, DiscoveryRespond
 from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
+try:
+    import pystray
+except Exception:
+    pystray = None
+
+try:
+    from PIL import Image, ImageDraw
+except Exception:
+    Image = None
+    ImageDraw = None
+
 logger = get_logger(__name__)
 
 
@@ -58,15 +69,18 @@ class WorkerApp:
         self.responder: DiscoveryResponder = None
         self._runtime_log_handler = None
         self._progress_log_index = None
-        self._is_minimized_to_taskbar = False
+        self._is_in_tray = False
+        self._is_closing = False
+        self._tray_icon = None
+        self._tray_warned_unavailable = False
+        self._tray_op_in_progress = False
 
         # 创建界面
         self._create_ui()
 
-        # 窗口事件：点击 × 时询问，点击 _ 时自动最小化后台运行
+        # 窗口事件：点击 × 时询问；点击 _ 自动最小化到系统托盘
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close_request)
         self.root.bind("<Unmap>", self._on_window_unmap, add="+")
-        self.root.bind("<Map>", self._on_window_map, add="+")
         
         # 定时刷新状态
         self._schedule_refresh()
@@ -199,45 +213,115 @@ class WorkerApp:
         """兼容 Messagebox.yesno 在不同平台/主题下的返回值。"""
         if isinstance(confirm, bool):
             return confirm
-        return str(confirm).strip().lower() in {"yes", "true", "ok", "1"}
+        return str(confirm).strip().lower() in {"yes", "true", "ok", "1", "y", "是", "确定"}
 
-    def _minimize_to_taskbar(self, show_log: bool = True):
-        """最小化到任务栏，Worker 继续后台运行。"""
+    def _tray_supported(self) -> bool:
+        return bool(pystray and Image and ImageDraw)
+
+    def _create_tray_image(self):
+        """创建托盘图标。"""
+        # 16x16 简单双色图标，避免依赖外部图片资源。
+        img = Image.new("RGB", (16, 16), "#1F6AA5")
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((3, 3, 12, 12), outline="white", width=1)
+        draw.rectangle((5, 5, 10, 10), fill="white")
+        return img
+
+    def _ensure_tray_icon(self) -> bool:
+        """确保系统托盘图标可用。"""
+        if self._tray_icon is not None:
+            return True
+        if not self._tray_supported():
+            if not self._tray_warned_unavailable:
+                self._tray_warned_unavailable = True
+                Messagebox.show_warning("系统托盘依赖缺失（pystray/Pillow），将退化为任务栏最小化。", "提示")
+            return False
+
+        menu = pystray.Menu(
+            pystray.MenuItem("打开窗口", lambda _icon, _item: self.root.after(0, self._restore_from_tray)),
+            pystray.MenuItem("退出子节点", lambda _icon, _item: self.root.after(0, self._exit_application)),
+        )
+        self._tray_icon = pystray.Icon(
+            "transcoder_cluster_worker",
+            self._create_tray_image(),
+            "Transcoder Cluster 子节点",
+            menu,
+        )
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        return True
+
+    def _stop_tray_icon(self):
+        icon = self._tray_icon
+        self._tray_icon = None
+        if icon is None:
+            return
         try:
-            self.root.iconify()
-            self._is_minimized_to_taskbar = True
-            if show_log:
-                self._log("窗口已最小化到任务栏，子节点继续后台运行")
+            icon.stop()
         except Exception as error:
-            logger.debug(f"最小化窗口失败: {error}")
+            logger.debug(f"停止托盘图标失败: {error}")
+
+    def _minimize_to_tray(self, show_log: bool = True):
+        """最小化到系统托盘并后台运行。"""
+        if self._is_in_tray or self._is_closing:
+            return
+        if self._tray_op_in_progress:
+            return
+        self._tray_op_in_progress = True
+        try:
+            if self._ensure_tray_icon():
+                self.root.withdraw()
+                self._is_in_tray = True
+                if show_log:
+                    self._log("窗口已最小化到系统托盘，子节点继续后台运行")
+            else:
+                # 依赖缺失时回退到任务栏最小化
+                self.root.iconify()
+                if show_log:
+                    self._log("窗口已最小化到任务栏，子节点继续后台运行")
+        finally:
+            self._tray_op_in_progress = False
+
+    def _restore_from_tray(self):
+        """从系统托盘恢复窗口。"""
+        if not self._is_in_tray:
+            return
+        self._is_in_tray = False
+        try:
+            self.root.deiconify()
+            self.root.state("normal")
+            self.root.lift()
+        except Exception as error:
+            logger.debug(f"恢复窗口失败: {error}")
+        self._stop_tray_icon()
+        self._log("窗口已从系统托盘恢复")
 
     def _on_window_unmap(self, _event=None):
-        """处理窗口最小化（标题栏 _ 按钮）。"""
+        """处理标题栏最小化（_）：自动入托盘后台运行。"""
+        if self._is_closing or self._is_in_tray:
+            return
         try:
-            if str(self.root.state()) == "iconic" and not self._is_minimized_to_taskbar:
-                self._is_minimized_to_taskbar = True
-                self._log("窗口已最小化到任务栏，子节点继续后台运行")
-        except Exception:
-            pass
-
-    def _on_window_map(self, _event=None):
-        """处理窗口恢复。"""
-        try:
-            if str(self.root.state()) == "normal" and self._is_minimized_to_taskbar:
-                self._is_minimized_to_taskbar = False
-                self._log("窗口已恢复到前台")
+            if str(self.root.state()) == "iconic":
+                # 用 after 回到主循环再处理，避免窗口状态竞争。
+                self.root.after(0, self._minimize_to_tray)
         except Exception:
             pass
 
     def _on_window_close_request(self):
-        """点击窗口 × 时，询问最小化到任务栏还是退出。"""
+        """点击窗口 × 时，询问最小化到系统托盘还是退出。"""
         confirm = Messagebox.yesno(
-            "是否最小化到任务栏并在后台继续运行？\n选择“否”将停止子节点并退出。",
+            "是否最小化到系统托盘并在后台继续运行？\n选择“否”将停止子节点并退出。",
             "关闭确认",
         )
         if self._is_confirmed_yes(confirm):
-            self._minimize_to_taskbar(show_log=True)
+            self._minimize_to_tray(show_log=True)
             return
+        self._exit_application()
+
+    def _exit_application(self):
+        """真正退出程序（停止节点后退出）。"""
+        if self._is_closing:
+            return
+        self._is_closing = True
         self._log("正在关闭窗口...")
         self.close(on_complete=lambda: self.root.after(0, self.root.destroy))
     
@@ -486,6 +570,7 @@ class WorkerApp:
                 self.worker.stop()
 
             self._remove_runtime_log_bridge()
+            self._stop_tray_icon()
 
             if on_complete:
                 on_complete()

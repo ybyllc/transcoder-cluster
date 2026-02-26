@@ -50,7 +50,9 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = [
-    # tkinter 是 Python 标准库，无需安装
+    "ttkbootstrap>=1.10.0",
+    "pystray>=0.19.5",
+    "Pillow>=10.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
