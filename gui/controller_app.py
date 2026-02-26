@@ -832,14 +832,34 @@ class ControllerApp:
                 Messagebox.show_info(f"部分节点不支持 {codec}，将自动使用支持的节点执行", "提示")
             target_workers = supported_workers
 
+        # 二次启动时仅处理“新文件 + 未完成文件”，已完成任务默认跳过。
+        files_to_run: List[str] = []
+        retained_tasks: List[Task] = []
+        existing_task_map: Dict[str, Task] = {task.input_file: task for task in self.current_tasks}
+        skipped_completed = 0
+        for file_path in self.selected_files:
+            existing = existing_task_map.get(file_path)
+            if existing and str(existing.status).lower() == "completed":
+                retained_tasks.append(existing)
+                skipped_completed += 1
+                continue
+            files_to_run.append(file_path)
+
+        if not files_to_run:
+            Messagebox.show_info(f"没有待转码任务，已完成 {skipped_completed}/{len(self.selected_files)}", "提示")
+            self.current_tasks = retained_tasks
+            self._refresh_file_tree()
+            self._refresh_overall_progress()
+            return
+
         output_suffix = self._get_output_suffix()
         tasks = self.controller.create_tasks_for_files(
-            self.selected_files,
+            files_to_run,
             ffmpeg_args,
             max_attempts=2,
             output_suffix=output_suffix,
         )
-        self.current_tasks = tasks
+        self.current_tasks = retained_tasks + tasks
 
         self.running = True
         self.dispatch_stop_event.clear()
