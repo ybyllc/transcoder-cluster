@@ -8,18 +8,24 @@ Worker 节点命令行入口
 import argparse
 import sys
 
+from transcoder_cluster import __version__
 from transcoder_cluster.core.discovery import DiscoveryResponder, HeartbeatService
-from transcoder_cluster.core.worker import Worker
-from transcoder_cluster.utils.config import load_config
+from transcoder_cluster.core.worker import Worker, get_ffmpeg_version
+from transcoder_cluster.utils.config import config, load_config
 from transcoder_cluster.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
+def _version_tag() -> str:
+    return __version__ if str(__version__).startswith("v") else f"v{__version__}"
+
+
 def main():
     """Worker 命令行入口"""
+    version_tag = _version_tag()
     parser = argparse.ArgumentParser(
-        description="启动 Transcoder Cluster Worker 节点",
+        description=f"启动 Transcoder Cluster {version_tag} Worker 节点",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -57,6 +63,10 @@ def main():
     # 加载配置
     if args.config:
         load_config(args.config)
+
+    ffmpeg_version = get_ffmpeg_version(config.ffmpeg_path)
+    ffmpeg_display = ffmpeg_version if ffmpeg_version else "未检测到，请下载"
+    logger.info(f"Transcoder Cluster {version_tag} | FFmpeg: {ffmpeg_display}")
 
     # 创建工作目录
     import os

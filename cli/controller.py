@@ -9,6 +9,7 @@ import argparse
 import os
 import sys
 
+from transcoder_cluster import __version__
 from transcoder_cluster.core.controller import Controller
 from transcoder_cluster.transcode.presets import get_preset, list_presets
 from transcoder_cluster.utils.config import load_config
@@ -17,10 +18,15 @@ from transcoder_cluster.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _version_tag() -> str:
+    return __version__ if str(__version__).startswith("v") else f"v{__version__}"
+
+
 def main():
     """Controller 命令行入口"""
+    version_tag = _version_tag()
     parser = argparse.ArgumentParser(
-        description="Transcoder Cluster Controller - 控制端",
+        description=f"Transcoder Cluster {version_tag} Controller - 主控端",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -62,6 +68,8 @@ def main():
     )
 
     args = parser.parse_args()
+
+    print(f"Transcoder Cluster {version_tag} - 主控端 CLI")
 
     # 加载配置
     if args.config:
