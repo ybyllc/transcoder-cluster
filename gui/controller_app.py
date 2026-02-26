@@ -63,6 +63,8 @@ class ControllerApp:
         self.node_runtime_status: Dict[str, Dict[str, Any]] = {}
         self._capabilities_fetching: set = set()
         self.active_worker_ips: List[str] = []
+        self._stop_in_progress = False
+        self._stop_worker_requests_done = True
 
         self.running = False
         self.dispatch_thread: Optional[threading.Thread] = None
@@ -343,7 +345,7 @@ class ControllerApp:
     def _set_run_button_mode(self, running: bool, stopping: bool = False):
         """切换开始/停止按钮状态。"""
         if stopping:
-            self.start_btn.config(text="停止中...", bootstyle="danger", state=DISABLED, command=self._stop_transcode)
+            self.start_btn.config(text="停止中", bootstyle="secondary", state=DISABLED, command=self._stop_transcode)
             return
 
         if running:
@@ -874,6 +876,8 @@ class ControllerApp:
         self.current_tasks = retained_tasks + tasks
 
         self.running = True
+        self._stop_in_progress = False
+        self._stop_worker_requests_done = True
         self.dispatch_stop_event.clear()
         self.active_worker_ips = list(dict.fromkeys(target_workers))
         self._set_run_button_mode(running=True)
@@ -918,22 +922,45 @@ class ControllerApp:
         return deduped
 
     def _stop_transcode(self):
-        if not self.running:
+        if not self.running or self._stop_in_progress:
             return
         confirm = Messagebox.yesno("确认停止当前转码任务吗？", "确认")
         if not self._is_confirmed_yes(confirm):
             return
 
+        self._stop_in_progress = True
+        self._stop_worker_requests_done = False
         self.dispatch_stop_event.set()
         self._set_run_button_mode(running=True, stopping=True)
         worker_ips = self._collect_active_worker_ips()
 
         def stop_runner():
+            stop_results: Dict[str, bool] = {}
             for worker_ip in worker_ips:
-                if not self.controller.stop_worker_task(worker_ip):
+                ok = self.controller.stop_worker_task(worker_ip)
+                stop_results[worker_ip] = ok
+                if not ok:
                     logger.warning("停止节点任务失败: %s", worker_ip)
+            self.root.after(0, self._on_stop_worker_requests_done, stop_results)
 
         threading.Thread(target=stop_runner, daemon=True).start()
+
+    def _on_stop_worker_requests_done(self, _stop_results: Dict[str, bool]):
+        self._stop_worker_requests_done = True
+        self._finalize_stop_button_if_ready()
+
+    def _finalize_stop_button_if_ready(self):
+        """仅在停止请求和调度线程都结束后恢复按钮。"""
+        if not self._stop_in_progress:
+            return
+        if self.running:
+            return
+        if not self._stop_worker_requests_done:
+            self._set_run_button_mode(running=True, stopping=True)
+            return
+        self._stop_in_progress = False
+        self._stop_worker_requests_done = True
+        self._set_run_button_mode(running=False)
 
     def _on_task_runtime_update(self, _task: Task):
         self._refresh_file_tree()
@@ -952,7 +979,10 @@ class ControllerApp:
     def _on_dispatch_finished(self, result: Dict[str, Any]):
         self.running = False
         self.active_worker_ips = []
-        self._set_run_button_mode(running=False)
+        if self._stop_in_progress:
+            self._finalize_stop_button_if_ready()
+        else:
+            self._set_run_button_mode(running=False)
         self._refresh_file_tree()
         self._refresh_overall_progress()
 
@@ -981,7 +1011,10 @@ class ControllerApp:
     def _on_dispatch_error(self, error_message: str):
         self.running = False
         self.active_worker_ips = []
-        self._set_run_button_mode(running=False)
+        if self._stop_in_progress:
+            self._finalize_stop_button_if_ready()
+        else:
+            self._set_run_button_mode(running=False)
         Messagebox.show_error(f"任务执行异常: {error_message}", "错误")
 
     def _delete_completed_original_files(self) -> Tuple[int, List[str]]:
