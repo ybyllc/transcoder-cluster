@@ -32,7 +32,8 @@ logger = get_logger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
 CODEC_OPTIONS = ["libx265", "libx264", "hevc_nvenc", "h264_nvenc"]
-BTN_PADDING = (8, 6)
+BTN_PADDING = (10, 7)
+BTN_FONT = ("Arial", 11, "bold")
 
 
 class ControllerApp:
@@ -57,6 +58,7 @@ class ControllerApp:
 
         self.user_config_path = os.path.join(os.getcwd(), "controller_gui_config.json")
         self._load_user_config()
+        self._configure_widget_styles()
 
         self._create_ui()
         self._check_local_ffmpeg()
@@ -65,6 +67,13 @@ class ControllerApp:
         self.discovery.start()
         self._broadcast_discovery()
         self._schedule_refresh()
+
+    def _configure_widget_styles(self):
+        """统一按钮与单选/复选字体样式。"""
+        style = getattr(self.root, "style", None) or ttk.Style()
+        style.configure("TButton", font=BTN_FONT)
+        style.configure("TRadiobutton", font=BTN_FONT)
+        style.configure("TCheckbutton", font=BTN_FONT)
 
     def _create_ui(self):
         main_frame = ttk.Frame(self.root, padding=10)
@@ -89,6 +98,7 @@ class ControllerApp:
         self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
         self.left_scrollbar.pack(side=RIGHT, fill=Y)
         self.left_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+        self._left_scroll_enabled = False
 
         self.left_frame = ttk.Frame(self.left_canvas)
         self.left_canvas_window = self.left_canvas.create_window((0, 0), window=self.left_frame, anchor="nw")
@@ -246,7 +256,7 @@ class ControllerApp:
             text="开始转码",
             bootstyle="success",
             command=self._start_transcode,
-            padding=(10, 8),
+            padding=(12, 9),
         )
         self.start_btn.pack(fill=X)
 
@@ -338,19 +348,46 @@ class ControllerApp:
     def _on_left_content_configure(self, _event=None):
         """同步左侧滚动区域大小。"""
         self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+        self._update_left_scroll_state()
 
     def _on_left_canvas_configure(self, event):
         """让左侧内容宽度跟随画布宽度。"""
         self.left_canvas.itemconfigure(self.left_canvas_window, width=event.width)
+        self._update_left_scroll_state()
+
+    def _update_left_scroll_state(self):
+        """仅在内容超出可视区时启用左栏滚动。"""
+        bbox = self.left_canvas.bbox("all")
+        canvas_height = self.left_canvas.winfo_height()
+        if not bbox or canvas_height <= 1:
+            return
+
+        content_height = bbox[3] - bbox[1]
+        should_scroll = content_height > canvas_height + 2
+
+        if should_scroll == self._left_scroll_enabled:
+            return
+
+        self._left_scroll_enabled = should_scroll
+        if should_scroll:
+            if not self.left_scrollbar.winfo_ismapped():
+                self.left_scrollbar.pack(side=RIGHT, fill=Y)
+        else:
+            self.left_canvas.yview_moveto(0.0)
+            if self.left_scrollbar.winfo_ismapped():
+                self.left_scrollbar.pack_forget()
 
     def _on_left_mousewheel(self, event):
         """处理左侧滚动条滚轮滚动。"""
+        if not self._left_scroll_enabled:
+            return "break"
         if event.delta:
             self.left_canvas.yview_scroll(int(-event.delta / 120), "units")
         elif event.num == 4:
             self.left_canvas.yview_scroll(-1, "units")
         elif event.num == 5:
             self.left_canvas.yview_scroll(1, "units")
+        return "break"
 
     def _bind_left_scroll_widgets(self, widget):
         """递归绑定左栏鼠标滚轮事件。"""
