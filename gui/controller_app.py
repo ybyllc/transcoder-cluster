@@ -39,6 +39,9 @@ CODEC_DEFAULT_QUALITY_HINTS = {
     "h264_nvenc": "默认自动（不加 -cq）",
 }
 BTN_PADDING = (10, 7)
+LEFT_PANEL_DEFAULT_WIDTH = 470
+RIGHT_PANEL_MIN_WIDTH = 760
+PANE_MIN_LEFT_WIDTH = 260
 
 
 class ControllerApp:
@@ -61,6 +64,8 @@ class ControllerApp:
         self.dispatch_thread: Optional[threading.Thread] = None
         self.dispatch_stop_event = threading.Event()
         self._last_discovery_time = 0.0
+        self._pane_width_initialized = False
+        self._pane_init_attempts = 0
 
         self.user_config_path = os.path.join(os.getcwd(), "controller_gui_config.json")
         self._load_user_config()
@@ -80,7 +85,7 @@ class ControllerApp:
         self.content_pane = ttk.Panedwindow(main_frame, orient=HORIZONTAL)
         self.content_pane.pack(fill=BOTH, expand=YES)
 
-        self.left_panel_frame = ttk.Frame(self.content_pane, width=470)
+        self.left_panel_frame = ttk.Frame(self.content_pane, width=LEFT_PANEL_DEFAULT_WIDTH)
         self.left_panel_frame.pack_propagate(False)
 
         self.left_scroll_container = ttk.Frame(self.left_panel_frame)
@@ -122,7 +127,8 @@ class ControllerApp:
         except tk.TclError:
             self.content_pane.add(self.left_panel_frame)
             self.content_pane.add(self.right_frame)
-        self.root.after(0, self._set_initial_pane_width)
+        self.content_pane.bind("<Configure>", self._ensure_initial_pane_width, add="+")
+        self.root.after_idle(self._set_initial_pane_width)
 
         self.bottom_frame = ttk.Frame(main_frame)
         self.bottom_frame.pack(fill=X, pady=(10, 0))
@@ -136,9 +142,31 @@ class ControllerApp:
     def _set_initial_pane_width(self):
         """设置左栏初始宽度，用户可拖拽调整。"""
         try:
-            self.content_pane.sashpos(0, 470)
+            total_width = self.content_pane.winfo_width()
+            if total_width <= 20:
+                if self._pane_init_attempts < 12:
+                    self._pane_init_attempts += 1
+                    self.root.after(80, self._set_initial_pane_width)
+                return
+
+            max_left = max(PANE_MIN_LEFT_WIDTH, total_width - RIGHT_PANEL_MIN_WIDTH)
+            target = min(LEFT_PANEL_DEFAULT_WIDTH, max_left)
+            target = max(PANE_MIN_LEFT_WIDTH, target)
+            self.content_pane.sashpos(0, target)
+
+            if self.content_pane.sashpos(0) > 1:
+                self._pane_width_initialized = True
+            elif self._pane_init_attempts < 12:
+                self._pane_init_attempts += 1
+                self.root.after(80, self._set_initial_pane_width)
         except Exception:
             pass
+
+    def _ensure_initial_pane_width(self, _event=None):
+        """兜底保证首帧左栏不被压成 0。"""
+        if self._pane_width_initialized:
+            return
+        self._set_initial_pane_width()
 
     def _create_left_flow_panel(self):
         ffmpeg_frame = ttk.Frame(self.left_frame, padding=(0, 0, 0, 8))
