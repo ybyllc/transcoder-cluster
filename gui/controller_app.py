@@ -136,9 +136,9 @@ class ControllerApp:
         suffix_row = ttk.Frame(files_frame)
         suffix_row.pack(fill=X, pady=(8, 0))
         ttk.Label(suffix_row, text="输出后缀").pack(side=LEFT)
-        self.output_suffix_var = ttk.StringVar(value="_output")
+        self.output_suffix_var = ttk.StringVar(value="_transcoded")
         ttk.Entry(suffix_row, textvariable=self.output_suffix_var, width=18).pack(side=LEFT, padx=(8, 0))
-        ttk.Label(suffix_row, text="默认: _output", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
+        ttk.Label(suffix_row, text="默认: _transcoded", bootstyle="secondary").pack(side=LEFT, padx=(8, 0))
 
         cfg_frame = ttk.Labelframe(self.left_frame, text="转码配置", padding=10)
         cfg_frame.pack(fill=X, pady=(0, 8))
@@ -476,7 +476,7 @@ class ControllerApp:
     def _get_output_suffix(self) -> str:
         suffix = self.output_suffix_var.get().strip()
         if not suffix:
-            suffix = "_output"
+            suffix = "_transcoded"
             self.output_suffix_var.set(suffix)
         return suffix
 

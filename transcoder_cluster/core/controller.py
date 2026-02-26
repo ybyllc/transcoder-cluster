@@ -197,7 +197,7 @@ class Controller:
         logger.info(f"创建任务: {task.id}")
         return task
 
-    def build_output_path(self, input_file: str, suffix: str = "_output") -> str:
+    def build_output_path(self, input_file: str, suffix: str = "_transcoded") -> str:
         """
         根据输入文件路径生成输出路径（同目录 + 后缀，自动避重名）。
         """
@@ -215,7 +215,7 @@ class Controller:
         input_files: List[str],
         ffmpeg_args: List[str],
         max_attempts: int = 1,
-        output_suffix: str = "_output",
+        output_suffix: str = "_transcoded",
     ) -> List[Task]:
         """按文件列表批量创建任务。"""
         tasks = []
