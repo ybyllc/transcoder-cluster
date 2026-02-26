@@ -19,7 +19,7 @@ import requests
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.dialogs import Messagebox
-from ttkbootstrap.tooltip import ToolTip
+from ttkbootstrap.widgets import ToolTip
 
 from transcoder_cluster import __version__
 from transcoder_cluster.core.controller import Controller, Task
