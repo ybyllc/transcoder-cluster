@@ -49,6 +49,14 @@ class TranscodePreset:
 # 预设配置
 PRESETS: Dict[str, TranscodePreset] = {
     # H.265/HEVC 预设
+    "720p_h265": TranscodePreset(
+        name="720p H.265",
+        description="1280x720 H.265 编码，更小体积优先",
+        codec="libx265",
+        resolution="1280:720",
+        crf=28,
+        preset="medium",
+    ),
     "1080p_h265_standard": TranscodePreset(
         name="1080p H.265 标准",
         description="1920x1080 H.265 编码，节省空间",
@@ -74,22 +82,6 @@ PRESETS: Dict[str, TranscodePreset] = {
         preset="medium",
     ),
     # H.264 预设
-    "1080p_h264_standard": TranscodePreset(
-        name="1080p H.264 标准",
-        description="1920x1080 H.264 编码，平衡画质与文件大小",
-        codec="libx264",
-        resolution="1920:1080",
-        crf=23,
-        preset="medium",
-    ),
-    "1080p_h264_high": TranscodePreset(
-        name="1080p H.264 高画质",
-        description="1920x1080 H.264 编码，高画质，兼容性好",
-        codec="libx264",
-        resolution="1920:1080",
-        crf=18,
-        preset="slow",
-    ),
     "720p_h264": TranscodePreset(
         name="720p H.264",
         description="1280x720 H.264 编码，适合网络传输",
@@ -105,6 +97,22 @@ PRESETS: Dict[str, TranscodePreset] = {
         resolution="854:480",
         crf=28,
         preset="fast",
+    ),
+    "1080p_h264_standard": TranscodePreset(
+        name="1080p H.264 标准",
+        description="1920x1080 H.264 编码，平衡画质与文件大小",
+        codec="libx264",
+        resolution="1920:1080",
+        crf=23,
+        preset="medium",
+    ),
+    "1080p_h264_high": TranscodePreset(
+        name="1080p H.264 高画质",
+        description="1920x1080 H.264 编码，高画质，兼容性好",
+        codec="libx264",
+        resolution="1920:1080",
+        crf=18,
+        preset="slow",
     ),
 
     # 硬件加速预设 (NVIDIA)

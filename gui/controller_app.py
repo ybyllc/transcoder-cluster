@@ -343,9 +343,10 @@ class ControllerApp:
         files_frame = ttk.Labelframe(self.right_frame, text="文件列表", padding=8)
         files_frame.pack(fill=BOTH, expand=YES)
 
-        columns = ("file", "source", "status", "progress", "worker", "output")
+        columns = ("task_no", "file", "source", "status", "progress", "worker", "output")
         self.files_tree = ttk.Treeview(files_frame, columns=columns, show="headings", bootstyle="primary")
 
+        self.files_tree.heading("task_no", text="任务号")
         self.files_tree.heading("file", text="文件")
         self.files_tree.heading("source", text="源分辨率")
         self.files_tree.heading("status", text="状态")
@@ -353,6 +354,7 @@ class ControllerApp:
         self.files_tree.heading("worker", text="节点")
         self.files_tree.heading("output", text="输出")
 
+        self.files_tree.column("task_no", width=70, anchor=CENTER)
         self.files_tree.column("file", width=240)
         self.files_tree.column("source", width=100, anchor=CENTER)
         self.files_tree.column("status", width=100, anchor=CENTER)
@@ -963,6 +965,17 @@ class ControllerApp:
                 return task
         return None
 
+    def _get_task_display_no(self, task: Optional[Task], fallback_index: int) -> str:
+        """任务号展示：优先使用 task_x 的编号，未创建任务时使用列表序号。"""
+        if not task:
+            return str(fallback_index)
+        task_id = str(task.id or "")
+        if task_id.startswith("task_"):
+            suffix = task_id.split("_", 1)[1]
+            if suffix.isdigit():
+                return suffix
+        return task_id or str(fallback_index)
+
     def _get_status_value(self, status: Any) -> str:
         """标准化节点状态值，便于比较。"""
         if isinstance(status, dict):
@@ -988,8 +1001,9 @@ class ControllerApp:
         self.file_tree_item_map = {}
 
         output_suffix = self._get_output_suffix()
-        for file_path in self.selected_files:
+        for index, file_path in enumerate(self.selected_files, start=1):
             task = self._get_task_by_input(file_path)
+            task_no = self._get_task_display_no(task, fallback_index=index)
             file_name = os.path.basename(file_path)
             source_resolution = self.file_info_map.get(file_path, "--")
 
@@ -1007,7 +1021,7 @@ class ControllerApp:
             item_id = self.files_tree.insert(
                 "",
                 END,
-                values=(file_name, source_resolution, status_text, progress_text, worker_text, output_text),
+                values=(task_no, file_name, source_resolution, status_text, progress_text, worker_text, output_text),
             )
             self.file_tree_item_map[item_id] = file_path
 

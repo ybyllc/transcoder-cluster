@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Optional
@@ -89,6 +90,8 @@ def list_ffmpeg_encoders(ffmpeg_path: str) -> list:
 class WorkerHandler(BaseHTTPRequestHandler):
     """Worker HTTP 请求处理器"""
 
+    TASK_OUTPUT_TTL_SECONDS = 300
+
     # 类级别变量，用于存储状态
     status: Dict[str, Any] = {"status": "idle", "current_task": None, "progress": 0}
     capabilities: Dict[str, Any] = {}
@@ -109,8 +112,39 @@ class WorkerHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404, "Not Found")
 
+    @staticmethod
+    def _safe_remove_file(file_path: Optional[str], reason: str = "") -> None:
+        """安全删除任务文件。"""
+        if not file_path:
+            return
+        if not os.path.exists(file_path):
+            return
+        try:
+            os.remove(file_path)
+            if reason:
+                logger.info(f"已清理任务文件: {os.path.basename(file_path)} ({reason})")
+            else:
+                logger.info(f"已清理任务文件: {os.path.basename(file_path)}")
+        except Exception as error:
+            logger.warning(f"清理任务文件失败: {file_path} | {error}")
+
+    @classmethod
+    def _schedule_cleanup(cls, file_path: Optional[str], delay_seconds: int, reason: str) -> None:
+        """延迟清理，避免任务结果长期残留。"""
+        if not file_path:
+            return
+
+        def delayed_cleanup():
+            time.sleep(delay_seconds)
+            cls._safe_remove_file(file_path, reason=reason)
+
+        threading.Thread(target=delayed_cleanup, daemon=True).start()
+
     def _handle_task(self) -> None:
         """处理转码任务"""
+        input_path = None
+        output_path = None
+        transcode_success = False
         try:
             # 更新状态为接收中
             WorkerHandler.status = {
@@ -158,6 +192,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
             output_path = os.path.join(config.work_dir, "output_" + video_file["name"])
 
             result = self._execute_ffmpeg(input_path, output_path, ffmpeg_args)
+            transcode_success = result.get("status") == "success"
 
             # 返回结果
             self.send_response(200)
@@ -171,6 +206,19 @@ class WorkerHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode())
+        finally:
+            # 输入文件在任务结束后即删除，避免源视频滞留。
+            self._safe_remove_file(input_path, reason="任务结束")
+            # 失败任务产物立即删除，避免无效输出长期残留。
+            if not transcode_success:
+                self._safe_remove_file(output_path, reason="任务失败")
+            else:
+                # 成功任务输出由下载接口优先清理，并加超时兜底。
+                self._schedule_cleanup(
+                    output_path,
+                    delay_seconds=self.TASK_OUTPUT_TTL_SECONDS,
+                    reason=f"超时未下载自动清理({self.TASK_OUTPUT_TTL_SECONDS}s)",
+                )
 
     def _execute_ffmpeg(
         self, input_path: str, output_path: str, ffmpeg_args: list
@@ -328,14 +376,25 @@ class WorkerHandler(BaseHTTPRequestHandler):
         filename = query.get("file", [None])[0]
 
         if filename:
-            file_path = os.path.join(config.work_dir, filename)
+            safe_name = os.path.basename(filename)
+            file_path = os.path.join(config.work_dir, safe_name)
             if os.path.exists(file_path):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
                 self.end_headers()
-                with open(file_path, "rb") as f:
-                    self.wfile.write(f.read())
+                try:
+                    with open(file_path, "rb") as f:
+                        while True:
+                            chunk = f.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                except Exception as error:
+                    logger.warning(f"下载响应异常: {safe_name} | {error}")
+                finally:
+                    # 结果一旦尝试下发即清理，避免隐私与空间泄漏。
+                    self._safe_remove_file(file_path, reason="下载完成后清理")
                 return
 
         self.send_response(404)
