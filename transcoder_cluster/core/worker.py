@@ -295,7 +295,7 @@ class WorkerHandler(BaseHTTPRequestHandler):
 
             # 实时读取进度，同时检查停止请求
             last_percent = -1
-            last_log_percent = -1
+            last_log_bucket = 0
             while True:
                 # 检查是否请求停止
                 if WorkerHandler._stop_requested:
@@ -327,14 +327,16 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 
                 sec = parse_ffmpeg_progress(line)
                 if sec and duration:
-                    percent = int(sec / duration * 100)
+                    percent = max(0, min(99, int(sec / duration * 100)))
+
                     if percent != last_percent:
                         WorkerHandler.status["progress"] = percent
                         last_percent = percent
-                    # 每10%输出一次日志
-                    if percent >= last_log_percent + 10:
-                        logger.info(f"转码进度: {percent}%")
-                        last_log_percent = percent
+
+                    log_bucket = percent // 10
+                    while log_bucket > last_log_bucket and last_log_bucket < 10:
+                        last_log_bucket += 1
+                        logger.info(f"转码进度: {last_log_bucket * 10}%")
 
             proc.wait()
             WorkerHandler._ffmpeg_proc = None
@@ -350,6 +352,9 @@ class WorkerHandler(BaseHTTPRequestHandler):
                 return {"status": "stopped", "error": "转码被用户中断"}
 
             if proc.returncode == 0:
+                if last_log_bucket < 10:
+                    logger.info("转码进度: 100%")
+
                 WorkerHandler.status = {
                     "status": "completed",
                     "current_task": None,
