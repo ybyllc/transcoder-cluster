@@ -3,19 +3,13 @@
 GUI 控制端应用（单页流程工作台）
 """
 
-import json
 import os
-import shutil
-import subprocess
-import tempfile
 import threading
 import time
 import tkinter as tk
-import zipfile
 from tkinter import filedialog
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.dialogs import Messagebox
@@ -25,7 +19,6 @@ from transcoder_cluster import __version__
 from transcoder_cluster.core.controller import Controller, Task
 from transcoder_cluster.core.discovery import DiscoveryService
 from transcoder_cluster.transcode.presets import get_preset, list_presets
-from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -73,11 +66,7 @@ class ControllerApp:
         self._pane_width_initialized = False
         self._pane_init_attempts = 0
 
-        self.user_config_path = os.path.join(os.getcwd(), "controller_gui_config.json")
-        self._load_user_config()
-
         self._create_ui()
-        self._check_local_ffmpeg()
         self._refresh_nodes_tree()
 
         self.discovery.start()
@@ -196,21 +185,6 @@ class ControllerApp:
         self._clamp_left_pane_width()
 
     def _create_left_flow_panel(self):
-        ffmpeg_frame = ttk.Frame(self.left_frame, padding=(0, 0, 0, 8))
-        ffmpeg_frame.pack(fill=X)
-        self.ffmpeg_version_var = ttk.StringVar(value="FFmpeg: 检测中...")
-        ttk.Label(ffmpeg_frame, textvariable=self.ffmpeg_version_var, font=("Arial", 10)).pack(side=LEFT)
-
-        self.install_ffmpeg_btn = ttk.Button(
-            ffmpeg_frame,
-            text="安装 FFmpeg",
-            bootstyle="warning",
-            command=self._install_ffmpeg,
-            padding=BTN_PADDING,
-        )
-        self.install_ffmpeg_btn.pack(side=RIGHT)
-        ToolTip(self.install_ffmpeg_btn, text="检测不到 FFmpeg 时可自动下载安装")
-
         files_frame = ttk.Labelframe(self.left_frame, text="添加文件", padding=10)
         files_frame.pack(fill=X, pady=(0, 8))
 
@@ -1126,7 +1100,7 @@ class ControllerApp:
 
             item_id = self.files_tree.insert(
                 "",
-                END,
+                "end",
                 values=(task_no, file_name, source_resolution, status_text, progress_text, worker_text, output_text),
             )
             self.file_tree_item_map[item_id] = file_path
@@ -1190,7 +1164,7 @@ class ControllerApp:
 
             self.nodes_tree.insert(
                 "",
-                END,
+                "end",
                 values=(
                     node_info.get("hostname", ""),
                     ip,
@@ -1246,111 +1220,6 @@ class ControllerApp:
                 self.root.after(0, self._refresh_nodes_tree)
 
         threading.Thread(target=runner, daemon=True).start()
-
-    def _check_local_ffmpeg(self):
-        try:
-            result = subprocess.run(
-                [config.ffmpeg_path, "-version"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0:
-                first_line = result.stdout.splitlines()[0] if result.stdout else ""
-                version = first_line.replace("ffmpeg version", "").strip()
-                self.ffmpeg_version_var.set(f"FFmpeg: {version}")
-                if self.install_ffmpeg_btn.winfo_manager():
-                    self.install_ffmpeg_btn.pack_forget()
-                return
-        except Exception:
-            pass
-
-        self.ffmpeg_version_var.set("FFmpeg: 未安装")
-        self.install_ffmpeg_btn.config(bootstyle="warning")
-        if not self.install_ffmpeg_btn.winfo_manager():
-            self.install_ffmpeg_btn.pack(side=RIGHT)
-
-    def _install_ffmpeg(self):
-        self.install_ffmpeg_btn.config(state=DISABLED)
-
-        def runner():
-            try:
-                self._install_ffmpeg_windows()
-                self.root.after(0, lambda: Messagebox.show_info("FFmpeg 安装完成", "成功"))
-            except Exception as error:
-                logger.exception("安装 FFmpeg 失败")
-                self.root.after(
-                    0,
-                    lambda: Messagebox.show_error(
-                        f"自动安装失败: {error}\n请手动选择本地 ffmpeg.exe。",
-                        "安装失败",
-                    ),
-                )
-            finally:
-                self.root.after(0, self._check_local_ffmpeg)
-                self.root.after(0, lambda: self.install_ffmpeg_btn.config(state=NORMAL))
-
-        threading.Thread(target=runner, daemon=True).start()
-
-    def _install_ffmpeg_windows(self):
-        download_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            zip_path = os.path.join(temp_dir, "ffmpeg.zip")
-            extract_dir = os.path.join(temp_dir, "extract")
-
-            response = requests.get(download_url, stream=True, timeout=90)
-            response.raise_for_status()
-            with open(zip_path, "wb") as file:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        file.write(chunk)
-
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(extract_dir)
-
-            ffmpeg_exe = None
-            ffprobe_exe = None
-            for root_dir, _, files in os.walk(extract_dir):
-                if "ffmpeg.exe" in files:
-                    ffmpeg_exe = os.path.join(root_dir, "ffmpeg.exe")
-                if "ffprobe.exe" in files:
-                    ffprobe_exe = os.path.join(root_dir, "ffprobe.exe")
-
-            if not ffmpeg_exe:
-                raise RuntimeError("安装包中未找到 ffmpeg.exe")
-
-            install_bin = os.path.join(os.getcwd(), "tools", "ffmpeg", "bin")
-            os.makedirs(install_bin, exist_ok=True)
-
-            target_ffmpeg = os.path.join(install_bin, "ffmpeg.exe")
-            shutil.copy2(ffmpeg_exe, target_ffmpeg)
-
-            if ffprobe_exe:
-                target_ffprobe = os.path.join(install_bin, "ffprobe.exe")
-                shutil.copy2(ffprobe_exe, target_ffprobe)
-
-            config.ffmpeg_path = target_ffmpeg
-            self._save_user_config()
-
-    def _load_user_config(self):
-        if not os.path.exists(self.user_config_path):
-            return
-        try:
-            with open(self.user_config_path, "r", encoding="utf-8") as file:
-                data = json.load(file)
-            ffmpeg_path = data.get("ffmpeg_path")
-            if ffmpeg_path:
-                config.ffmpeg_path = ffmpeg_path
-        except Exception as error:
-            logger.warning(f"读取 GUI 配置失败: {error}")
-
-    def _save_user_config(self):
-        try:
-            with open(self.user_config_path, "w", encoding="utf-8") as file:
-                json.dump({"ffmpeg_path": config.ffmpeg_path}, file, ensure_ascii=False, indent=2)
-        except Exception as error:
-            logger.warning(f"保存 GUI 配置失败: {error}")
 
     def run(self):
         self.root.mainloop()
