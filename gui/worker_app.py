@@ -10,21 +10,36 @@ import os
 import threading
 import logging
 import tkinter.messagebox as tk_messagebox
+import json
+import shutil
+import tempfile
+import zipfile
 
+import requests
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from ttkbootstrap.dialogs import Messagebox
 from ttkbootstrap.widgets import ToolTip
 from ttkbootstrap.widgets.scrolled import ScrolledText
 from datetime import datetime
+from typing import Callable, Optional
 
 from transcoder_cluster import __version__
-from transcoder_cluster.core.worker import Worker, WorkerHandler
-from transcoder_cluster.core.discovery import HeartbeatService, DiscoveryResponder
+from transcoder_cluster.core.discovery import DiscoveryResponder, HeartbeatService
+from transcoder_cluster.core.worker import (
+    Worker,
+    WorkerHandler,
+    get_ffmpeg_version,
+    list_ffmpeg_encoders,
+)
 from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_NORMAL = (FONT_FAMILY, 10)
+FONT_BOLD = (FONT_FAMILY, 10, "bold")
 
 
 class WorkerGuiLogHandler(logging.Handler):
@@ -50,13 +65,14 @@ class WorkerApp:
     
     def __init__(self, root: ttk.Window):
         self.root = root
+        self.root.option_add("*Font", FONT_NORMAL)
         
         # Worker 实例
-        self.worker: Worker = None
+        self.worker: Optional[Worker] = None
         
         # 发现服务
-        self.heartbeat: HeartbeatService = None
-        self.responder: DiscoveryResponder = None
+        self.heartbeat: Optional[HeartbeatService] = None
+        self.responder: Optional[DiscoveryResponder] = None
         self._runtime_log_handler = None
         self._progress_log_index = None
         self._is_in_tray = False
@@ -69,8 +85,12 @@ class WorkerApp:
         self._pil_image = None
         self._pil_draw = None
 
+        self.user_config_path = os.path.join(os.getcwd(), "worker_gui_config.json")
+        self._load_user_config()
+
         # 创建界面
         self._create_ui()
+        self._refresh_ffmpeg_capabilities()
 
         # 窗口事件：点击 × 时询问；点击 _ 自动最小化到系统托盘
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close_request)
@@ -89,24 +109,65 @@ class WorkerApp:
         status_grid = ttk.Frame(status_frame)
         status_grid.pack(fill=X)
         
-        ttk.Label(status_grid, text="状态:", font=("Arial", 10)).grid(row=0, column=0, sticky=W, padx=5, pady=5)
+        ttk.Label(status_grid, text="FFmpeg:", font=FONT_NORMAL).grid(row=0, column=0, sticky=W, padx=5, pady=5)
+
+        self.ffmpeg_row_frame = ttk.Frame(status_grid)
+        self.ffmpeg_row_frame.grid(row=0, column=1, columnspan=4, sticky=W, padx=(5, 0), pady=5)
+
+        self.ffmpeg_installed_var = ttk.StringVar(value="")
+        self.ffmpeg_installed_label = ttk.Label(
+            self.ffmpeg_row_frame,
+            textvariable=self.ffmpeg_installed_var,
+            font=FONT_BOLD,
+            bootstyle="success",
+        )
+        self.ffmpeg_installed_label.pack(side=LEFT)
+
+        self.ffmpeg_version_var = ttk.StringVar(value="检测中...")
+        self.ffmpeg_version_label = ttk.Label(
+            self.ffmpeg_row_frame,
+            textvariable=self.ffmpeg_version_var,
+            font=FONT_BOLD,
+        )
+        self.ffmpeg_version_label.pack(side=LEFT, padx=(4, 0))
+
+        self.capabilities_var = ttk.StringVar(value="支持能力：检测中...")
+        self.capabilities_label = ttk.Label(
+            self.ffmpeg_row_frame,
+            textvariable=self.capabilities_var,
+            font=FONT_NORMAL,
+        )
+        self.capabilities_label.pack(side=LEFT, padx=(16, 0))
+
+        self.install_ffmpeg_btn = ttk.Button(
+            self.ffmpeg_row_frame,
+            text="安装 FFmpeg",
+            bootstyle="warning",
+            command=self._install_ffmpeg,
+            padding=(8, 3),
+        )
+        self.install_ffmpeg_btn.pack(side=LEFT, padx=(8, 0))
+        self.install_ffmpeg_btn.pack_forget()
+        ToolTip(self.install_ffmpeg_btn, text="未检测到 FFmpeg 时可自动下载安装")
+
+        ttk.Label(status_grid, text="状态:", font=FONT_NORMAL).grid(row=1, column=0, sticky=W, padx=5, pady=5)
         self.status_var = ttk.StringVar(value="⚪ 未启动")
         self.status_label = ttk.Label(
-            status_grid, 
-            textvariable=self.status_var, 
-            font=("Arial", 11, "bold"),
-            bootstyle="secondary"
+            status_grid,
+            textvariable=self.status_var,
+            font=FONT_BOLD,
+            bootstyle="secondary",
         )
-        self.status_label.grid(row=0, column=1, sticky=W, padx=5, pady=5)
-        
-        ttk.Label(status_grid, text="端口:", font=("Arial", 10)).grid(row=1, column=0, sticky=W, padx=5, pady=5)
+        self.status_label.grid(row=1, column=1, sticky=W, padx=5, pady=5)
+
+        ttk.Label(status_grid, text="端口:", font=FONT_NORMAL).grid(row=2, column=0, sticky=W, padx=5, pady=5)
         self.port_var = ttk.StringVar(value="9000")
         self.port_entry = ttk.Entry(status_grid, textvariable=self.port_var, width=15)
-        self.port_entry.grid(row=1, column=1, sticky=W, padx=5, pady=5)
-        
-        ttk.Label(status_grid, text="工作目录:", font=("Arial", 10)).grid(row=2, column=0, sticky=W, padx=5, pady=5)
+        self.port_entry.grid(row=2, column=1, sticky=W, padx=5, pady=5)
+
+        ttk.Label(status_grid, text="工作目录:", font=FONT_NORMAL).grid(row=3, column=0, sticky=W, padx=5, pady=5)
         self.work_dir_var = ttk.StringVar(value="./worker_files")
-        ttk.Entry(status_grid, textvariable=self.work_dir_var, width=40).grid(row=2, column=1, sticky=W, padx=5, pady=5)
+        ttk.Entry(status_grid, textvariable=self.work_dir_var, width=40).grid(row=3, column=1, columnspan=4, sticky=W, padx=5, pady=5)
         
         # 当前任务
         task_frame = ttk.Labelframe(self.root, text="🔄 当前任务", padding=15)
@@ -115,11 +176,11 @@ class WorkerApp:
         task_grid = ttk.Frame(task_frame)
         task_grid.pack(fill=X)
         
-        ttk.Label(task_grid, text="任务:", font=("Arial", 10)).grid(row=0, column=0, sticky=W, padx=5, pady=5)
+        ttk.Label(task_grid, text="任务:", font=FONT_NORMAL).grid(row=0, column=0, sticky=W, padx=5, pady=5)
         self.task_var = ttk.StringVar(value="无")
-        ttk.Label(task_grid, textvariable=self.task_var, font=("Arial", 10)).grid(row=0, column=1, sticky=W, padx=5, pady=5)
-        
-        ttk.Label(task_grid, text="进度:", font=("Arial", 10)).grid(row=1, column=0, sticky=W, padx=5, pady=5)
+        ttk.Label(task_grid, textvariable=self.task_var, font=FONT_NORMAL).grid(row=0, column=1, sticky=W, padx=5, pady=5)
+
+        ttk.Label(task_grid, text="进度:", font=FONT_NORMAL).grid(row=1, column=0, sticky=W, padx=5, pady=5)
         
         # 进度条框架
         progress_frame = ttk.Frame(task_grid)
@@ -138,7 +199,7 @@ class WorkerApp:
         self.progress_label = ttk.Label(
             progress_frame, 
             text="0%", 
-            font=("Arial", 10, "bold"),
+            font=FONT_BOLD,
             bootstyle="primary"
         )
         self.progress_label.pack(side=LEFT, padx=10)
@@ -186,22 +247,174 @@ class WorkerApp:
         
         self.status_indicator = ttk.Label(
             self.status_bar, 
-            text="⚪ 未连接", 
+            text="⚪ 未启动", 
             bootstyle="inverse-secondary",
-            font=("Arial", 10)
+            font=FONT_NORMAL,
         )
         self.status_indicator.pack(side=LEFT, padx=10, pady=5)
-        
+
+        # 运行时间
         self.uptime_label = ttk.Label(
             self.status_bar, 
             text="运行时间: --", 
-            font=("Arial", 10)
+            font=FONT_NORMAL,
         )
         self.uptime_label.pack(side=RIGHT, padx=10, pady=5)
-        
+
         # 记录启动时间
         self.start_time = None
 
+    def _refresh_ffmpeg_capabilities(self):
+        """刷新 FFmpeg 与能力展示。"""
+        version = get_ffmpeg_version(config.ffmpeg_path)
+        if version:
+            self.ffmpeg_version_var.set(version)
+            self.ffmpeg_installed_var.set("已安装")
+            self.ffmpeg_installed_label.config(bootstyle="success")
+            self._set_install_button_visible(False)
+            self._update_capabilities(ffmpeg_available=True)
+            return
+
+        self.ffmpeg_version_var.set("")
+        self.ffmpeg_installed_var.set("未安装")
+        self.ffmpeg_installed_label.config(bootstyle="danger")
+        self._set_install_button_visible(True)
+        self._update_capabilities(ffmpeg_available=False)
+
+    def _update_capabilities(self, ffmpeg_available: bool):
+        """更新编码能力文案。"""
+        if not ffmpeg_available:
+            self.capabilities_var.set("支持能力：软解")
+            return
+
+        try:
+            encoders = list_ffmpeg_encoders(config.ffmpeg_path)
+            has_nvenc = "h264_nvenc" in encoders or "hevc_nvenc" in encoders
+            if has_nvenc:
+                self.capabilities_var.set("支持能力：软解，NVENC")
+            else:
+                self.capabilities_var.set("支持能力：软解")
+        except Exception:
+            self.capabilities_var.set("支持能力：软解")
+
+    def _set_install_button_visible(self, visible: bool):
+        """根据 FFmpeg 状态切换安装按钮显示。"""
+        if visible:
+            self.install_ffmpeg_btn.pack(side=LEFT, padx=(8, 0))
+        else:
+            self.install_ffmpeg_btn.pack_forget()
+
+    def _install_ffmpeg(self):
+        """自动安装 FFmpeg（Windows）。"""
+        self._log("开始安装 FFmpeg...")
+        self.install_ffmpeg_btn.config(state=DISABLED)
+
+        def runner():
+            try:
+                self._log_threadsafe("[1/5] 正在准备安装环境...")
+                self._install_ffmpeg_windows()
+                self._log_threadsafe("FFmpeg 安装完成")
+                self.root.after(0, lambda: Messagebox.show_info("FFmpeg 安装完成", "成功"))
+            except Exception as error:
+                logger.exception("安装 FFmpeg 失败")
+                self._log_threadsafe(f"FFmpeg 安装失败: {error}")
+                self.root.after(
+                    0,
+                    lambda: Messagebox.show_error(
+                        f"自动安装失败: {error}\n请手动安装 FFmpeg 并加入 PATH，或设置 TC_FFMPEG_PATH。",
+                        "安装失败",
+                    ),
+                )
+            finally:
+                self.root.after(0, self._refresh_ffmpeg_capabilities)
+                self.root.after(0, lambda: self.install_ffmpeg_btn.config(state=NORMAL))
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    def _install_ffmpeg_windows(self):
+        """下载并安装 FFmpeg 到 tools/ffmpeg/bin。"""
+        if os.name != "nt":
+            raise RuntimeError("当前仅支持 Windows 自动安装")
+
+        download_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = os.path.join(temp_dir, "ffmpeg.zip")
+            extract_dir = os.path.join(temp_dir, "extract")
+
+            self._log_threadsafe("[2/5] 正在下载 FFmpeg 安装包...")
+            response = requests.get(download_url, stream=True, timeout=90)
+            response.raise_for_status()
+
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded_size = 0
+            next_progress_mark = 10
+            with open(zip_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        file.write(chunk)
+
+                        if total_size > 0:
+                            downloaded_size += len(chunk)
+                            progress = int(downloaded_size * 100 / total_size)
+                            while progress >= next_progress_mark and next_progress_mark <= 100:
+                                self._log_threadsafe(f"下载进度: {next_progress_mark}%")
+                                next_progress_mark += 10
+
+            if total_size <= 0:
+                self._log_threadsafe("下载完成")
+
+            self._log_threadsafe("[3/5] 正在解压安装包...")
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+
+            self._log_threadsafe("[4/5] 正在定位并复制 ffmpeg.exe...")
+            ffmpeg_exe = None
+            ffprobe_exe = None
+            for root_dir, _, files in os.walk(extract_dir):
+                if "ffmpeg.exe" in files:
+                    ffmpeg_exe = os.path.join(root_dir, "ffmpeg.exe")
+                if "ffprobe.exe" in files:
+                    ffprobe_exe = os.path.join(root_dir, "ffprobe.exe")
+
+            if not ffmpeg_exe:
+                raise RuntimeError("安装包中未找到 ffmpeg.exe")
+
+            install_bin = os.path.join(os.getcwd(), "tools", "ffmpeg", "bin")
+            os.makedirs(install_bin, exist_ok=True)
+
+            target_ffmpeg = os.path.join(install_bin, "ffmpeg.exe")
+            shutil.copy2(ffmpeg_exe, target_ffmpeg)
+
+            if ffprobe_exe:
+                target_ffprobe = os.path.join(install_bin, "ffprobe.exe")
+                shutil.copy2(ffprobe_exe, target_ffprobe)
+
+            self._log_threadsafe("[5/5] 正在保存配置...")
+            config.ffmpeg_path = target_ffmpeg
+            self._save_user_config()
+
+    def _load_user_config(self):
+        """加载 Worker GUI 本地配置。"""
+        if not os.path.exists(self.user_config_path):
+            return
+        try:
+            with open(self.user_config_path, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            ffmpeg_path = data.get("ffmpeg_path")
+            if ffmpeg_path:
+                config.ffmpeg_path = ffmpeg_path
+        except Exception as error:
+            logger.warning(f"读取 Worker GUI 配置失败: {error}")
+
+    def _save_user_config(self):
+        """保存 Worker GUI 本地配置。"""
+        try:
+            with open(self.user_config_path, "w", encoding="utf-8") as file:
+                json.dump({"ffmpeg_path": config.ffmpeg_path}, file, ensure_ascii=False, indent=2)
+        except Exception as error:
+            logger.warning(f"保存 Worker GUI 配置失败: {error}")
+    
     def _load_tray_dependencies(self):
         """按需加载托盘依赖，避免影响启动速度。"""
         if self._tray_deps_checked:
@@ -355,12 +568,23 @@ class WorkerApp:
             return
         self._is_closing = True
         self._log("正在关闭窗口...")
-        self.close(on_complete=lambda: self.root.after(0, self.root.destroy))
+
+        def on_complete() -> None:
+            self.root.after(0, self.root.destroy)
+
+        self.close(on_complete=on_complete)
     
     def _log(self, message: str):
         """添加日志"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._append_log_line(f"[{timestamp}]  {message}")
+
+    def _log_threadsafe(self, message: str):
+        """在后台线程中安全写入 GUI 日志。"""
+        try:
+            self.root.after(0, self._log, message)
+        except Exception:
+            logger.info(message)
 
     def _append_log_line(self, line: str):
         """向日志框追加一行文本。"""
@@ -453,6 +677,11 @@ class WorkerApp:
     
     def _start_worker(self):
         """启动 Worker"""
+        if not get_ffmpeg_version(config.ffmpeg_path):
+            self._refresh_ffmpeg_capabilities()
+            Messagebox.show_error("未检测到 FFmpeg，请先点击“安装 FFmpeg”完成安装。", "错误")
+            return
+
         try:
             port = int(self.port_var.get())
             work_dir = self.work_dir_var.get()
@@ -516,6 +745,10 @@ class WorkerApp:
     
     def _on_stop_complete(self):
         """停止完成后的 UI 更新"""
+        self.worker = None
+        self.heartbeat = None
+        self.responder = None
+
         self._remove_runtime_log_bridge()
         self._progress_log_index = None
         # 重置启动时间
@@ -542,7 +775,10 @@ class WorkerApp:
     
     def _schedule_refresh(self):
         """定时刷新状态"""
-        if self.worker:
+        if self._is_closing:
+            return
+
+        if self.worker and getattr(self.worker, "_running", False):
             status = WorkerHandler.status
             
             # 更新状态
@@ -583,7 +819,7 @@ class WorkerApp:
         """运行应用"""
         self.root.mainloop()
     
-    def close(self, on_complete: callable = None):
+    def close(self, on_complete: Optional[Callable[[], None]] = None):
         """关闭应用
         
         Args:
@@ -594,12 +830,15 @@ class WorkerApp:
         def do_close():
             if self.heartbeat:
                 self.heartbeat.stop()
-            
+                self.heartbeat = None
+
             if self.responder:
                 self.responder.stop()
-            
+                self.responder = None
+
             if self.worker:
                 self.worker.stop()
+                self.worker = None
 
             self._remove_runtime_log_bridge()
             self._stop_tray_icon()
@@ -622,7 +861,7 @@ def main():
     
     # 自动启动 Worker
     root.after(100, app._start_worker)
-    
+
     app.run()
 
 
