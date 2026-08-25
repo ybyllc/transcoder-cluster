@@ -60,6 +60,7 @@ class WorkerApp:
         self.responder: DiscoveryResponder = None
         self._runtime_log_handler = None
         self._progress_log_index = None
+        self._stopping = False
 
         # 创建界面
         self._create_ui()
@@ -155,6 +156,9 @@ class WorkerApp:
         self.stop_btn.pack(side=LEFT, padx=10)
         self.stop_btn.config(state=DISABLED)
         ToolTip(self.stop_btn, text="停止 Worker 节点")
+
+        # Reserve the compact bottom row before the expandable log panel.
+        self._create_status_bar()
         
         # 日志
         log_frame = ttk.Labelframe(self.root, text="📜 日志", padding=10)
@@ -164,13 +168,12 @@ class WorkerApp:
         self.log_text.pack(fill=BOTH, expand=YES)
         self.log_text.text.config(state=DISABLED)
         
-        # 底部状态栏
-        self._create_status_bar()
-    
     def _create_status_bar(self):
         """创建底部状态栏"""
         self.status_bar = ttk.Frame(self.root, bootstyle="secondary")
-        self.status_bar.pack(fill=X, padx=15, pady=(0, 10))
+        # Keep the status bar fixed at the bottom; the log panel should absorb
+        # vertical compression before this compact status row does.
+        self.status_bar.pack(side=BOTTOM, fill=X, padx=15, pady=(0, 10))
         
         self.status_indicator = ttk.Label(
             self.status_bar, 
@@ -286,6 +289,9 @@ class WorkerApp:
     
     def _start_worker(self):
         """启动 Worker"""
+        if self.worker is not None:
+            return
+        self._stopping = False
         try:
             port = int(self.port_var.get())
             work_dir = self.work_dir_var.get()
@@ -329,6 +335,10 @@ class WorkerApp:
     
     def _stop_worker(self):
         """停止 Worker"""
+        if self.worker is None or self._stopping:
+            return
+        self._stopping = True
+        self.stop_btn.config(state=DISABLED)
         self._log("正在停止 Worker...")
         
         # 在后台线程中执行停止操作，避免阻塞 UI
@@ -351,6 +361,10 @@ class WorkerApp:
         """停止完成后的 UI 更新"""
         self._remove_runtime_log_bridge()
         self._progress_log_index = None
+        self.heartbeat = None
+        self.responder = None
+        self.worker = None
+        self._stopping = False
         # 重置启动时间
         self.start_time = None
         self.status_var.set("🔴 已停止")
@@ -375,7 +389,7 @@ class WorkerApp:
     
     def _schedule_refresh(self):
         """定时刷新状态"""
-        if self.worker:
+        if self.worker and not self._stopping:
             status = WorkerHandler.status
             
             # 更新状态
