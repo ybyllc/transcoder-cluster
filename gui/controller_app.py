@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +22,7 @@ from ttkbootstrap.constants import *
 from ttkbootstrap.dialogs import Messagebox
 from ttkbootstrap.widgets import ToolTip
 
+from gui.tk_compat import ensure_supported_tk, use_native_ttk_on_legacy_macos
 from transcoder_cluster import __version__
 from transcoder_cluster.core.controller import Controller, Task
 from transcoder_cluster.core.discovery import DiscoveryService
@@ -28,6 +30,7 @@ from transcoder_cluster.transcode.presets import get_preset, list_presets
 from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
+ttk = use_native_ttk_on_legacy_macos(ttk)
 logger = get_logger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".m4v", ".ts", ".webm"}
@@ -77,7 +80,7 @@ class ControllerApp:
         self._load_user_config()
 
         self._create_ui()
-        self._check_local_ffmpeg()
+        self._check_local_ffmpeg_async()
         self._refresh_nodes_tree()
 
         self.discovery.start()
@@ -98,12 +101,12 @@ class ControllerApp:
         self.left_scroll_container.pack(side=TOP, fill=BOTH, expand=YES)
 
         self.left_canvas = tk.Canvas(self.left_scroll_container, highlightthickness=0)
-        self.left_v_scrollbar = ttk.Scrollbar(
+        self.left_v_scrollbar = tk.Scrollbar(
             self.left_scroll_container,
             orient=VERTICAL,
             command=self.left_canvas.yview,
         )
-        self.left_h_scrollbar = ttk.Scrollbar(
+        self.left_h_scrollbar = tk.Scrollbar(
             self.left_scroll_container,
             orient=HORIZONTAL,
             command=self.left_canvas.xview,
@@ -1248,6 +1251,8 @@ class ControllerApp:
         threading.Thread(target=runner, daemon=True).start()
 
     def _check_local_ffmpeg(self):
+        installed = False
+        version = ""
         try:
             result = subprocess.run(
                 [config.ffmpeg_path, "-version"],
@@ -1258,31 +1263,68 @@ class ControllerApp:
             if result.returncode == 0:
                 first_line = result.stdout.splitlines()[0] if result.stdout else ""
                 version = first_line.replace("ffmpeg version", "").strip()
-                self.ffmpeg_version_var.set(f"FFmpeg: {version}")
-                if self.install_ffmpeg_btn.winfo_manager():
-                    self.install_ffmpeg_btn.pack_forget()
-                return
+                installed = True
         except Exception:
             pass
+
+        self._apply_ffmpeg_status(installed, version)
+
+    def _apply_ffmpeg_status(self, installed: bool, version: str = ""):
+        if installed:
+            self.ffmpeg_version_var.set(f"FFmpeg: {version}")
+            if self.install_ffmpeg_btn.winfo_manager():
+                self.install_ffmpeg_btn.pack_forget()
+            return
 
         self.ffmpeg_version_var.set("FFmpeg: 未安装")
         self.install_ffmpeg_btn.config(bootstyle="warning")
         if not self.install_ffmpeg_btn.winfo_manager():
             self.install_ffmpeg_btn.pack(side=RIGHT)
 
+    def _check_local_ffmpeg_async(self):
+        """后台检测 FFmpeg，避免启动时窗口空白或卡顿。"""
+        def runner():
+            installed = False
+            version = ""
+            try:
+                result = subprocess.run(
+                    [config.ffmpeg_path, "-version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    first_line = result.stdout.splitlines()[0] if result.stdout else ""
+                    version = first_line.replace("ffmpeg version", "").strip()
+                    installed = True
+            except Exception:
+                pass
+
+            self.root.after(0, lambda: self._apply_ffmpeg_status(installed, version))
+
+        threading.Thread(target=runner, daemon=True).start()
+
     def _install_ffmpeg(self):
         self.install_ffmpeg_btn.config(state=DISABLED)
 
         def runner():
             try:
-                self._install_ffmpeg_windows()
+                if sys.platform == "win32":
+                    self._install_ffmpeg_windows()
+                elif sys.platform == "darwin":
+                    self._install_ffmpeg_macos()
+                else:
+                    raise RuntimeError(
+                        "当前系统不支持自动安装。请使用系统包管理器安装 FFmpeg，"
+                        "或通过 TC_FFMPEG_PATH 指定可执行文件。"
+                    )
                 self.root.after(0, lambda: Messagebox.show_info("FFmpeg 安装完成", "成功"))
             except Exception as error:
                 logger.exception("安装 FFmpeg 失败")
                 self.root.after(
                     0,
                     lambda: Messagebox.show_error(
-                        f"自动安装失败: {error}\n请手动选择本地 ffmpeg.exe。",
+                        f"自动安装失败: {error}\n请安装 FFmpeg 后重启应用，或通过 TC_FFMPEG_PATH 指定路径。",
                         "安装失败",
                     ),
                 )
@@ -1333,6 +1375,30 @@ class ControllerApp:
             config.ffmpeg_path = target_ffmpeg
             self._save_user_config()
 
+    def _install_ffmpeg_macos(self):
+        """通过 Homebrew 安装 FFmpeg，不修改系统目录。"""
+        brew = shutil.which("brew")
+        if not brew:
+            raise RuntimeError("未找到 Homebrew。请先从 https://brew.sh 安装 Homebrew")
+
+        result = subprocess.run(
+            [brew, "install", "ffmpeg"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            # Homebrew 已安装时会返回非零，仍应继续检查 ffmpeg 是否可用。
+            if not shutil.which("ffmpeg"):
+                detail = (result.stderr or result.stdout or "未知错误").strip()
+                raise RuntimeError(detail[-500:])
+
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            raise RuntimeError("Homebrew 安装完成，但 PATH 中仍未找到 ffmpeg")
+        config.ffmpeg_path = ffmpeg_path
+        self._save_user_config()
+
     def _load_user_config(self):
         if not os.path.exists(self.user_config_path):
             return
@@ -1361,13 +1427,18 @@ class ControllerApp:
 
 
 def main():
+    ensure_supported_tk()
+    os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
     version_tag = __version__ if str(__version__).startswith("v") else f"v{__version__}"
     root = ttk.Window(
         title=f"Transcoder Cluster {version_tag} - 主控端",
         themename="cosmo",
+        iconphoto=None,
         size=(1700, 1250),
     )
     app = ControllerApp(root)
+    # Native Tk on older macOS may defer pack geometry until an idle pass.
+    root.update_idletasks()
 
     def on_close():
         app.close()

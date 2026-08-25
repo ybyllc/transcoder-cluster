@@ -123,6 +123,14 @@ https://github.com/ybyllc/transcoder-cluster/releases
 一台设备下载`tc-control-gui.exe`
 作为运算节点的设备下载 `tc-worker-gui.exe`（主控端也可以同时下载节点）
 
+macOS 用户请下载对应芯片的压缩包：
+
+- `transcoder-cluster-macos-arm64.zip`：Apple Silicon（M1/M2/M3/M4）
+- `transcoder-cluster-macos-x86_64.zip`：Intel Mac
+
+解压后双击 `tc-control-gui` 或 `tc-worker-gui` 即可。首次打开若被 Gatekeeper 拦截，
+请在“系统设置 → 隐私与安全性”中允许打开，或在终端执行 `xattr -dr com.apple.quarantine <文件路径>`。
+
 ### 从源码安装
 
 ```bash
@@ -369,7 +377,7 @@ transcoder-cluster/
 ├── .github/
 │   └── workflows/
 │       ├── python-tests.yml    # GitHub Actions CI
-│       └── release.yml         # Windows 打包与 Release 发布
+│       └── release.yml         # Windows/macOS 打包与 Release 发布
 ├── transcoder_cluster/         # 核心包
 │   ├── __init__.py
 │   ├── core/
@@ -416,13 +424,19 @@ transcoder-cluster/
 git clone https://github.com/ybyllc/transcoder-cluster.git
 cd transcoder-cluster
 
+# macOS 请使用 Homebrew Python（系统/Command Line Tools Python 的 Tk 8.5 会白屏）
+brew install python@3.14 python-tk@3.14
+
 # 创建虚拟环境
-python -m venv .venv
+"$(brew --prefix)/bin/python3" -m venv .venv
 source .venv/bin/activate  # Linux/macOS
 # .venv\Scripts\activate  # Windows
 
+# 升级 pip
+python -m pip install --upgrade pip
+
 # 安装开发依赖
-pip install -e ".[dev]"
+python -m pip install -e ".[dev,build]"
 ```
 
 ### 运行测试

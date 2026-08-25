@@ -16,12 +16,15 @@ from ttkbootstrap.widgets import ToolTip
 from ttkbootstrap.widgets.scrolled import ScrolledText
 from datetime import datetime
 
+from gui.tk_compat import ensure_supported_tk, use_native_scrolledtext_on_legacy_macos, use_native_ttk_on_legacy_macos
 from transcoder_cluster import __version__
 from transcoder_cluster.core.worker import Worker, WorkerHandler
 from transcoder_cluster.core.discovery import HeartbeatService, DiscoveryResponder
 from transcoder_cluster.utils.config import config
 from transcoder_cluster.utils.logger import get_logger
 
+ttk = use_native_ttk_on_legacy_macos(ttk)
+ScrolledText = use_native_scrolledtext_on_legacy_macos(ScrolledText)
 logger = get_logger(__name__)
 
 
@@ -441,13 +444,18 @@ class WorkerApp:
 
 def main():
     """GUI Worker 入口"""
+    ensure_supported_tk()
+    os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
     version_tag = __version__ if str(__version__).startswith("v") else f"v{__version__}"
     root = ttk.Window(
         title=f"Transcoder Cluster {version_tag} - 子节点",
         themename="cosmo",
+        iconphoto=None,
         #size=(600, 550)
     )
     app = WorkerApp(root)
+    # Native Tk on older macOS may defer pack geometry until an idle pass.
+    root.update_idletasks()
     
     # 自动启动 Worker
     root.after(100, app._start_worker)

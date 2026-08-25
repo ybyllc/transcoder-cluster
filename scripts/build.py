@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 本地打包脚本
-用于在本地构建 EXE 文件
+用于在本地构建 GUI 发布包（Windows/macOS/Linux）
 
 使用方法:
     python scripts/build.py
@@ -40,8 +40,8 @@ def install_dependencies():
 
 
 def build():
-    """构建 EXE"""
-    print("🔨 构建 EXE 文件...")
+    """构建 GUI 可执行文件。"""
+    print(f"🔨 构建 GUI 文件 ({sys.platform})...")
     os.chdir(PROJECT_ROOT)
     
     # 使用 PyInstaller 构建
@@ -71,18 +71,23 @@ def package():
     
     # 创建发布包
     version = datetime.now().strftime("%Y%m%d")
-    zip_name = f"transcoder-cluster-windows-{version}"
+    platform_name = {
+        "win32": "windows",
+        "darwin": f"macos-{('arm64' if os.uname().machine == 'arm64' else 'x86_64')}",
+    }.get(sys.platform, sys.platform)
+    zip_name = f"transcoder-cluster-{platform_name}-{version}"
     zip_path = DIST_DIR / f"{zip_name}.zip"
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # 添加 EXE 文件
-        for exe_dir in ["tc-worker-gui", "tc-control-gui"]:
-            exe_path = DIST_DIR / exe_dir
-            if exe_path.exists():
-                for file in exe_path.rglob("*"):
+        # 添加 PyInstaller 输出（one-file 文件或 macOS .app 目录）。
+        for app_name in ["tc-worker-gui", "tc-control-gui"]:
+            output = DIST_DIR / app_name
+            if output.is_file():
+                zf.write(output, f"{zip_name}/{output.name}")
+            elif output.is_dir():
+                for file in output.rglob("*"):
                     if file.is_file():
-                        arcname = f"{zip_name}/{exe_dir}/{file.relative_to(exe_path)}"
-                        zf.write(file, arcname)
+                        zf.write(file, f"{zip_name}/{file.relative_to(DIST_DIR)}")
         
         # 添加文档
         readme = PROJECT_ROOT / "README.md"
@@ -99,7 +104,7 @@ def package():
 def main():
     """主函数"""
     print("=" * 50)
-    print("Transcoder Cluster EXE 打包工具")
+    print("Transcoder Cluster GUI 打包工具")
     print("=" * 50)
     
     # 清理
