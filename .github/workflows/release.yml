@@ -91,7 +91,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: macos-13
+          - runner: macos-13-large
             arch: x86_64
           - runner: macos-14
             arch: arm64
