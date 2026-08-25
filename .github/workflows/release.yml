@@ -91,8 +91,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: macos-13-large
-            arch: x86_64
           - runner: macos-14
             arch: arm64
     runs-on: ${{ matrix.runner }}
@@ -151,12 +149,6 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: tc-control-gui
-        path: artifacts/
-
-    - name: Download macOS Intel package
-      uses: actions/download-artifact@v4
-      with:
-        name: transcoder-cluster-macos-x86_64
         path: artifacts/
 
     - name: Download macOS Apple Silicon package
@@ -218,7 +210,6 @@ jobs:
         files: |
           artifacts/tc-worker-gui.exe
           artifacts/tc-control-gui.exe
-          artifacts/transcoder-cluster-macos-x86_64.zip
           artifacts/transcoder-cluster-macos-arm64.zip
         body_path: release_body.md
         draft: false
